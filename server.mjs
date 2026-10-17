@@ -1,15 +1,26 @@
-import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import readline from "node:readline";
+
+// Security: stdout is reserved for the native host's IPC protocol, so all logs go to stderr.
+for (const level of ["log", "info", "warn", "error"]) console[level] = (...a) => process.stderr.write(a.map(String).join(" ") + "\n");
+
+// Security: outbound requests (which carry the Grok Bot bearer token) may only go to the official backend.
+const ALLOWED_FETCH_ORIGINS = new Set(["https://api2.cursor.sh"]);
+const nativeFetch = globalThis.fetch;
+globalThis.fetch = (input, init) => {
+  const origin = new URL(typeof input === "string" ? input : input.url).origin;
+  if (!ALLOWED_FETCH_ORIGINS.has(origin)) return Promise.reject(new Error(`Blocked outbound request to ${origin}`));
+  return nativeFetch(input, init);
+};
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "public");
-const PORT = Number(process.env.PORT || 4789);
 
 const HOME = os.homedir();
 const CURSOR_STATE_DB = path.join(HOME, "Library/Application Support/Cursor/User/globalStorage/state.vscdb");
@@ -19,7 +30,7 @@ const GROKBOT_DOT_SETTINGS = path.join(HOME, ".grokbot/settings.json");
 const PERSISTENCE_DIR = path.join(GROKBOT_SUPPORT_DIR, "sand-client-persistence");
 const ROSTER_AVATARS_DIR = path.join(GROKBOT_SUPPORT_DIR, "roster-avatars");
 const LOCAL_STATE_FILE = path.join(HOME, ".grokbot-notch-state.json");
-const BACKEND_BASE = process.env.SAND_BACKEND_URL || "https://api2.cursor.sh";
+const BACKEND_BASE = "https://api2.cursor.sh";
 
 const BASE32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 
@@ -167,31 +178,14 @@ function writeLocalNotchState(patch) {
 
 let cachedSafeStorageKey = undefined;
 function getSafeStorageKey() {
-  if (cachedSafeStorageKey !== undefined) return cachedSafeStorageKey;
-  const saved = readLocalNotchState();
-  if (saved.safeStorageKeyBase64) {
-    try {
-      const buf = Buffer.from(saved.safeStorageKeyBase64, "base64");
-      if (buf.length === 16) {
-        cachedSafeStorageKey = buf;
-        return cachedSafeStorageKey;
-      }
-    } catch {}
-  }
-  try {
-    const pw = execFileSync(
-      "/usr/bin/security",
-      ["find-generic-password", "-w", "-s", "Grok Bot Safe Storage"],
-      { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] }
-    ).trim();
-    const key = crypto.pbkdf2Sync(pw, "saltysalt", 1003, 16, "sha1");
-    cachedSafeStorageKey = key;
-    writeLocalNotchState({ safeStorageKeyBase64: key.toString("base64") });
-    return cachedSafeStorageKey;
-  } catch {
-    cachedSafeStorageKey = null;
-    return null;
-  }
+  // Security: the native app reads "Grok Bot Safe Storage" from the Keychain itself (so macOS asks on behalf of
+  // GrokBot Notch, not /usr/bin/security) and hands it over the private pipe. The key lives in memory only.
+  return cachedSafeStorageKey ?? null;
+}
+
+function setSafeStoragePassword(pw) {
+  cachedSafeStorageKey = pw ? crypto.pbkdf2Sync(pw, "saltysalt", 1003, 16, "sha1") : null;
+  console.log(`[gb-notch] Grok Bot Keychain key ${cachedSafeStorageKey ? "received" : "missing"}`);
 }
 
 function decryptSafeStorageValue(storedValue) {
@@ -357,8 +351,8 @@ function readAuthContext(localSnap = null, targetAccountScope = null) {
   const snap = localSnap || readLocalPersistenceSnapshot();
   const desiredScope = targetAccountScope || snap.activeAccountScope || null;
 
-  let accessToken = process.env.CURSOR_ACCESS_TOKEN || null;
-  let machineId = process.env.CURSOR_MACHINE_ID || null;
+  let accessToken = null;
+  let machineId = null;
   let cachedEmail = "";
   let teamId = process.env.GROKBOT_TEAM_ID
     ? Number(process.env.GROKBOT_TEAM_ID)
@@ -803,33 +797,15 @@ async function getBotTranscript(agentId, callId = null) {
 }
 
 function readJsonBody(req) {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    req.on("data", (chunk) => {
-      data += chunk;
-      if (data.length > 2 * 1024 * 1024) {
-        reject(new Error("Payload too large"));
-      }
-    });
-    req.on("end", () => {
-      if (!data) return resolve({});
-      try {
-        resolve(JSON.parse(data));
-      } catch (e) {
-        reject(e);
-      }
-    });
-    req.on("error", reject);
-  });
+  if (!req.body) return Promise.resolve({});
+  if (req.body.length > 2 * 1024 * 1024) return Promise.reject(new Error("Payload too large"));
+  return Promise.resolve(JSON.parse(req.body));
 }
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type"
+    "Content-Type": "application/json; charset=utf-8"
   });
   res.end(body);
 }
@@ -845,17 +821,8 @@ const MIME_TYPES = {
   ".mp3": "audio/mpeg"
 };
 
-const server = http.createServer(async (req, res) => {
-  if (req.method === "OPTIONS") {
-    res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type"
-    });
-    return res.end();
-  }
-
-  const parsedUrl = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
+async function handleRequest(req, res) {
+  const parsedUrl = new URL(req.url || "/", "gbnotch://app");
   const pathname = parsedUrl.pathname;
 
   try {
@@ -1038,30 +1005,56 @@ const server = http.createServer(async (req, res) => {
 
     // Serve static files from public/
     const relPath = pathname === "/" ? "index.html" : pathname.slice(1);
-    const safePath = path.normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, "");
-    const fullPath = path.join(PUBLIC_DIR, safePath);
+    const fullPath = path.resolve(PUBLIC_DIR, relPath);
 
-    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+    if (fullPath.startsWith(PUBLIC_DIR + path.sep) && fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
       const ext = path.extname(fullPath).toLowerCase();
       res.writeHead(200, {
         "Content-Type": MIME_TYPES[ext] || "application/octet-stream",
         "Cache-Control": "no-cache"
       });
-      fs.createReadStream(fullPath).pipe(res);
-      return;
+      return res.end(fs.readFileSync(fullPath));
     }
 
     sendJson(res, 404, { ok: false, error: "Not found" });
   } catch (err) {
-    console.error("[gb-notch] API error:", err);
+    console.error("[gb-notch] API error:", err.message);
     sendJson(res, err.status || 500, {
       ok: false,
       error: err.message || "Internal error",
       refusal: err.refusal || null
     });
   }
-});
+}
 
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`[gb-notch] GrokBot Notch server listening on http://127.0.0.1:${PORT}`);
+// IPC: the native app sends one JSON request per line on stdin and receives one JSON response per line on stdout.
+// There is deliberately no network listener, so nothing else on this Mac (or any website) can reach this process.
+readline.createInterface({ input: process.stdin }).on("line", async (line) => {
+  let msg;
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (msg.type === "safeStorage") return setSafeStoragePassword(msg.password);
+  const out = { id: msg.id, status: 500, headers: {}, chunks: [] };
+  const res = {
+    writeHead(status, headers = {}) { out.status = status; out.headers = headers; },
+    end(body) { if (body != null) out.chunks.push(Buffer.from(body)); }
+  };
+  try {
+    await handleRequest({ method: msg.method || "GET", url: msg.url || "/", body: msg.body || "" }, res);
+  } catch (err) {
+    console.error("[gb-notch] IPC error:", err.message);
+  }
+  process.stdout.write(JSON.stringify({ id: out.id, status: out.status, headers: out.headers, body: Buffer.concat(out.chunks).toString("base64") }) + "\n");
 });
+process.stdin.on("end", () => process.exit(0));
+
+// Security: remove any Keychain-derived key persisted by older versions of this app.
+const legacyState = readLocalNotchState();
+if (legacyState.safeStorageKeyBase64) {
+  delete legacyState.safeStorageKeyBase64;
+  fs.writeFileSync(LOCAL_STATE_FILE, JSON.stringify(legacyState, null, 2), { mode: 0o600 });
+}
+console.log("[gb-notch] GrokBot Notch bridge ready (stdio IPC, no network listener)");

@@ -30,16 +30,7 @@ if ! command -v swiftc >/dev/null 2>&1; then
   exit 1
 fi
 
-# 3. Verify Node.js (v22.5+ required for built-in node:sqlite)
-if ! command -v node >/dev/null 2>&1; then
-  echo "[error] Node.js is required (v22.5+ for built-in node:sqlite). Install via: brew install node"
-  exit 1
-fi
-
-NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-if [ "$NODE_MAJOR" -lt 22 ]; then
-  echo "[warn] Node.js v22+ is recommended for built-in node:sqlite (found $(node -v))."
-fi
+# 3. Node.js is bundled (pinned + checksum-verified) by build-mac-app.sh; no system Node needed.
 
 # 4. Check for Grok Bot.app
 if [ ! -d "/Applications/Grok Bot.app" ]; then

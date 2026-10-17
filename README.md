@@ -8,6 +8,17 @@
 
 ---
 
+## 🔒 Hardened fork
+
+This fork removes the local HTTP server (`127.0.0.1:4789`) entirely, so no website or other app can reach your Grok Bot session:
+
+- The UI loads from an app-private `gbnotch://` scheme and talks to the Node bridge over stdin/stdout pipes — **no network listener, no CORS**.
+- The Keychain key is read by the signed app (macOS prompts for *GrokBot Notch*), passed over the pipe, and kept **in memory only**; older on-disk copies are deleted.
+- Outbound requests carrying your token are restricted to `https://api2.cursor.sh`; the page has a strict CSP (only `wss://api.x.ai` besides itself), cannot navigate away, and only it can use the mic.
+- Node.js is bundled at a pinned version, verified by SHA-256; no `pkill`/`kill -9` in scripts.
+
+---
+
 ## 🤖 Let Your Grok Bot Set This Up For You
 
 Want your **Grok Bot** to install and launch this for you automatically? Just paste this into your Grok Bot chat:

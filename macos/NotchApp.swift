@@ -56,6 +56,138 @@ final class NotchWebView: WKWebView {
     }
 }
 
+// MARK: - Private stdio Bridge to the Bundled Node Process
+// Security: the Node bridge has no network listener. It is reachable only through these pipes,
+// and the web UI reaches it only through the app-private gbnotch:// URL scheme below.
+final class NodeBridge {
+    private let process = Process()
+    private let stdinPipe = Pipe()
+    private let stdoutPipe = Pipe()
+    private let queue = DispatchQueue(label: "gbnotch.bridge")
+    private var buffer = Data()
+    private var nextId = 0
+    private var pending: [Int: (Int, [String: String], Data) -> Void] = [:]
+
+    func start() {
+        guard let resources = Bundle.main.resourceURL else { return }
+        // Security: always run the pinned, checksum-verified Node bundled inside the app, never one from PATH.
+        process.executableURL = resources.appendingPathComponent("node/bin/node")
+        process.arguments = [resources.appendingPathComponent("app/server.mjs").path]
+        process.currentDirectoryURL = resources.appendingPathComponent("app")
+        process.environment = ["HOME": NSHomeDirectory(), "PATH": "/usr/bin:/bin"]
+        process.standardInput = stdinPipe
+        process.standardOutput = stdoutPipe
+        process.standardError = Self.logFileHandle()
+        stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let chunk = handle.availableData
+            self?.queue.async { self?.consume(chunk) }
+        }
+        do {
+            try process.run()
+        } catch {
+            NSLog("[GrokBotNotch] Failed to start bundled Node bridge: \(error)")
+        }
+        // Runs first on the serial queue, so every API request waits until the Keychain answer arrives.
+        queue.async {
+            guard let password = Self.readGrokBotSafeStoragePassword() else { return }
+            self.writeLine(["type": "safeStorage", "password": password])
+        }
+    }
+
+    private static func readGrokBotSafeStoragePassword() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "Grok Bot Safe Storage",
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func writeLine(_ msg: [String: Any]) {
+        guard var line = try? JSONSerialization.data(withJSONObject: msg) else { return }
+        line.append(0x0A)
+        stdinPipe.fileHandleForWriting.write(line)
+    }
+
+    func stop() {
+        try? stdinPipe.fileHandleForWriting.close()
+        if process.isRunning { process.terminate() }
+    }
+
+    func send(method: String, url: String, body: Data?, completion: @escaping (Int, [String: String], Data) -> Void) {
+        queue.async {
+            self.nextId += 1
+            let id = self.nextId
+            self.pending[id] = completion
+            self.writeLine(["id": id, "method": method, "url": url, "body": body.flatMap { String(data: $0, encoding: .utf8) } ?? ""])
+        }
+    }
+
+    private func consume(_ chunk: Data) {
+        buffer.append(chunk)
+        while let nl = buffer.firstIndex(of: 0x0A) {
+            let line = buffer.subdata(in: buffer.startIndex..<nl)
+            buffer.removeSubrange(buffer.startIndex...nl)
+            guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                  let id = obj["id"] as? Int,
+                  let completion = pending.removeValue(forKey: id) else { continue }
+            let status = obj["status"] as? Int ?? 500
+            let headers = obj["headers"] as? [String: String] ?? [:]
+            let body = (obj["body"] as? String).flatMap { Data(base64Encoded: $0) } ?? Data()
+            completion(status, headers, body)
+        }
+    }
+
+    private static func logFileHandle() -> FileHandle? {
+        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/GrokBotNotch")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let file = dir.appendingPathComponent("bridge.log")
+        FileManager.default.createFile(atPath: file.path, contents: nil, attributes: [.posixPermissions: 0o600])
+        let handle = try? FileHandle(forWritingTo: file)
+        handle?.truncateFile(atOffset: 0)
+        return handle
+    }
+}
+
+// MARK: - App-Private gbnotch:// Scheme (serves UI + API through the stdio bridge)
+final class NotchSchemeHandler: NSObject, WKURLSchemeHandler {
+    static let scheme = "gbnotch"
+    private let bridge: NodeBridge
+    private var active = Set<ObjectIdentifier>()
+
+    init(bridge: NodeBridge) { self.bridge = bridge }
+
+    func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
+        guard let url = task.request.url, url.host == "app" else {
+            task.didFailWithError(URLError(.unsupportedURL))
+            return
+        }
+        let key = ObjectIdentifier(task)
+        active.insert(key)
+        var path = url.path.isEmpty ? "/" : url.path
+        if let q = url.query { path += "?\(q)" }
+        bridge.send(method: task.request.httpMethod ?? "GET", url: path, body: task.request.httpBody) { [weak self] status, headers, body in
+            DispatchQueue.main.async {
+                guard let self = self, self.active.remove(key) != nil else { return }
+                var h = headers
+                // Security: lock the page down to its own scheme plus the xAI realtime socket.
+                h["Content-Security-Policy"] = "default-src 'self'; connect-src 'self' wss://api.x.ai; img-src 'self' data:; media-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+                guard let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: h) else { return }
+                task.didReceive(response)
+                task.didReceive(body)
+                task.didFinish()
+            }
+        }
+    }
+
+    func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {
+        active.remove(ObjectIdentifier(task))
+    }
+}
+
 // MARK: - Native 24kHz AVAudioEngine Voice Pipeline
 final class NativeVoiceAudioController {
     private var engine: AVAudioEngine?
@@ -228,11 +360,11 @@ final class NativeVoiceAudioController {
 }
 
 // MARK: - Main Application Delegate
-final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKUIDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate {
     private var panel: NotchPanel!
     private var webView: NotchWebView!
     private var statusItem: NSStatusItem!
-    private var serverProcess: Process?
+    private let bridge = NodeBridge()
     private let audioController = NativeVoiceAudioController()
 
     private let panelWidth: CGFloat = 400
@@ -260,13 +392,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
         registerCarbonGlobalHotKeys()
 
-        ensureNodeServerRunning { [weak self] in
-            DispatchQueue.main.async {
-                self?.setupStatusItem()
-                self?.setupNotchPanel()
-                self?.setupEventMonitors()
-            }
-        }
+        bridge.start()
+        setupStatusItem()
+        setupNotchPanel()
+        setupEventMonitors()
 
         NotificationCenter.default.addObserver(
             self,
@@ -281,9 +410,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if let hk1 = toggleHotKeyRef { UnregisterEventHotKey(hk1) }
         if let hk2 = voiceHotKeyRef { UnregisterEventHotKey(hk2) }
         updateExpandedNavigationHotKeys(active: false, includeArrows: false)
-        if let proc = serverProcess, proc.isRunning {
-            proc.terminate()
-        }
+        bridge.stop()
     }
 
     private func updateExpandedNavigationHotKeys(active: Bool, includeArrows: Bool) {
@@ -373,63 +500,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         )
     }
 
-    // MARK: - Node Server Management
-    private func ensureNodeServerRunning(completion: @escaping () -> Void) {
-        guard let url = URL(string: "http://127.0.0.1:4789/api/bootstrap") else {
-            completion()
-            return
-        }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 0.6
-        URLSession.shared.dataTask(with: req) { [weak self] _, response, _ in
-            if let http = response as? HTTPURLResponse, http.statusCode == 200 {
-                completion()
-                return
-            }
-            self?.spawnEmbeddedNodeServer(completion: completion)
-        }.resume()
-    }
-
-    private func spawnEmbeddedNodeServer(completion: @escaping () -> Void) {
-        let bundleServerPath = Bundle.main.resourceURL?.appendingPathComponent("app/server.mjs").path
-        let siblingServerPath = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("server.mjs").path
-        let serverPath: String
-        if let bPath = bundleServerPath, FileManager.default.fileExists(atPath: bPath) {
-            serverPath = bPath
-        } else {
-            serverPath = siblingServerPath
-        }
-
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let nodeCandidates = [
-            "/opt/homebrew/bin/node",
-            "/usr/local/bin/node",
-            "\(home)/.nvm/current/bin/node",
-            "\(home)/.volta/bin/node",
-            "\(home)/.local/share/fnm/aliases/default/bin/node"
-        ]
-        let nodeBin = nodeCandidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? "/usr/bin/env"
-        let proc = Process()
-        if nodeBin == "/usr/bin/env" {
-            proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            proc.arguments = ["node", serverPath]
-        } else {
-            proc.executableURL = URL(fileURLWithPath: nodeBin)
-            proc.arguments = [serverPath]
-        }
-        proc.currentDirectoryURL = URL(fileURLWithPath: (serverPath as NSString).deletingLastPathComponent)
-        do {
-            try proc.run()
-            self.serverProcess = proc
-        } catch {
-            NSLog("[GrokBotNotch] Failed to start server.mjs: \(error)")
-        }
-
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.55) {
-            completion()
-        }
-    }
-
     // MARK: - Main Screen & Hardware Notch Detection
     private func primaryMacScreen() -> NSScreen? {
         if #available(macOS 12.0, *) {
@@ -480,9 +550,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let config = WKWebViewConfiguration()
         config.userContentController.add(self, name: "notchHost")
         config.mediaTypesRequiringUserActionForPlayback = []
+        config.setURLSchemeHandler(NotchSchemeHandler(bridge: bridge), forURLScheme: NotchSchemeHandler.scheme)
+        config.websiteDataStore = .nonPersistent()
 
         webView = NotchWebView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight), configuration: config)
         webView.uiDelegate = self
+        webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
         webView.allowsMagnification = false
 
@@ -490,7 +563,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         panel.contentView = webView
         panel.orderFrontRegardless()
 
-        if let url = URL(string: "http://127.0.0.1:4789/?native=1") {
+        if let url = URL(string: "\(NotchSchemeHandler.scheme)://app/?native=1") {
             webView.load(URLRequest(url: url))
         }
 
@@ -747,7 +820,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         type: WKMediaCaptureType,
         decisionHandler: @escaping (WKPermissionDecision) -> Void
     ) {
-        decisionHandler(.grant)
+        // Security: only the app's own UI may ever use the microphone.
+        decisionHandler(origin.protocol == NotchSchemeHandler.scheme ? .grant : .deny)
+    }
+
+    // Security: the web view may never navigate away from the app's own UI.
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        decisionHandler(navigationAction.request.url?.scheme == NotchSchemeHandler.scheme ? .allow : .cancel)
     }
 }
 

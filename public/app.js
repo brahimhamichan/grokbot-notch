@@ -25,15 +25,14 @@ function postNativeMessage(payload) {
 }
 
 // UI Sound Effects
-const SOUNDS = {
-  open: new Audio("/sounds/open-blip.wav"),
-  tick: new Audio("/sounds/tick.wav"),
-  doubleTick: new Audio("/sounds/double-tick.wav"),
-  chimeA: new Audio("/sounds/chime-a.wav"),
-  chimeB: new Audio("/sounds/chime-b.wav")
-};
-for (const s of Object.values(SOUNDS)) {
-  s.volume = 0.4;
+// Media elements can't stream from the app's custom scheme, so each sound is fetched once into a blob URL.
+const SOUND_FILES = { open: "open-blip", tick: "tick", doubleTick: "double-tick", chimeA: "chime-a", chimeB: "chime-b" };
+const SOUNDS = {};
+for (const [name, file] of Object.entries(SOUND_FILES)) {
+  const audio = new Audio();
+  audio.volume = 0.4;
+  SOUNDS[name] = audio;
+  fetch(`/sounds/${file}.wav`).then((r) => r.blob()).then((b) => { audio.src = URL.createObjectURL(b); }).catch(() => {});
 }
 function playUiSound(name) {
   try {

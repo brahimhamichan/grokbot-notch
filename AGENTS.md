@@ -7,7 +7,7 @@ If a user asked you (their **Grok Bot**, Cursor agent, Claude Code, or Codex) to
 Run a quick check to ensure the Mac has:
 - **macOS 13+** (`uname -s` == `Darwin`)
 - **Xcode Command Line Tools (`swiftc`)**: verify with `swiftc --version`
-- **Node.js v22.5+** (required for built-in `node:sqlite`): verify with `node -v`. If Node is older than v22.5 or missing, install or upgrade it via Homebrew (`brew install node`) or NVM/fnm.
+- **Apple Silicon Mac**: a pinned, checksum-verified Node.js is bundled into the app at build time; no system Node needed.
 - **Desktop Grok Bot (`/Applications/Grok Bot.app`)**: verify the user has Desktop Grok Bot installed and signed in.
 
 ## 2. Clone & Build
@@ -28,11 +28,10 @@ npm run install:app
 
 ## 3. Verify It Is Running
 
-1. Verify the local bridge server is healthy and discovers the user's GrokBots:
+1. Verify the private bridge started and received the Keychain key (approve the macOS Keychain prompt for **GrokBot Notch**):
    ```bash
-   curl -s http://127.0.0.1:4789/api/bootstrap | head -c 400
+   cat ~/Library/Logs/GrokBotNotch/bridge.log
    ```
-   Confirm `"ok":true` and that `"bots"` is populated.
 2. Verify the native macOS Notch app process (`GrokBotNotch`) is running:
    ```bash
    ps aux | grep GrokBotNotch | grep -v grep

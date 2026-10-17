@@ -5,3 +5,4 @@ GrokBot Notch.app/
 node_modules/
 .env
 .env.*
+vendor/

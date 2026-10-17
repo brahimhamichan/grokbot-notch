@@ -16,6 +16,26 @@ if [ -f "/Applications/Grok Bot.app/Contents/Resources/icon.icns" ]; then
   cp "/Applications/Grok Bot.app/Contents/Resources/icon.icns" "$RESOURCES_DIR/icon.icns"
 fi
 
+# Security: bundle a pinned Node.js release, verified against its official SHA-256, instead of trusting PATH.
+NODE_VERSION="v24.22.0"
+NODE_SHA256="6a9724d9b50a5f22b4816cded441b5a8d9ddae546191a5e5b7efa5a5e2ee26d5"
+NODE_DIST="node-$NODE_VERSION-darwin-arm64"
+VENDOR_DIR="$ROOT_DIR/vendor"
+if [ "$(uname -m)" != "arm64" ]; then
+  echo "[error] This build bundles Node.js for Apple Silicon (arm64) only."
+  exit 1
+fi
+if [ ! -x "$VENDOR_DIR/$NODE_DIST/bin/node" ]; then
+  mkdir -p "$VENDOR_DIR"
+  echo "[build] Downloading Node.js $NODE_VERSION..."
+  curl -fsSL "https://nodejs.org/dist/$NODE_VERSION/$NODE_DIST.tar.gz" -o "$VENDOR_DIR/$NODE_DIST.tar.gz"
+  echo "$NODE_SHA256  $VENDOR_DIR/$NODE_DIST.tar.gz" | shasum -a 256 -c -
+  tar -xzf "$VENDOR_DIR/$NODE_DIST.tar.gz" -C "$VENDOR_DIR"
+  rm "$VENDOR_DIR/$NODE_DIST.tar.gz"
+fi
+mkdir -p "$RESOURCES_DIR/node/bin"
+cp "$VENDOR_DIR/$NODE_DIST/bin/node" "$RESOURCES_DIR/node/bin/node"
+
 cp "$ROOT_DIR/server.mjs" "$RESOURCES_DIR/app/server.mjs"
 cp "$ROOT_DIR/package.json" "$RESOURCES_DIR/app/package.json"
 cp -R "$ROOT_DIR/public" "$RESOURCES_DIR/app/public"
@@ -39,13 +59,13 @@ fi
 
 if [ -n "$SIGN_ID" ]; then
   echo "[build] Signing with $SIGN_ID..."
-  codesign --force --deep --options runtime \
+  codesign --force --options runtime \
     --entitlements "$ROOT_DIR/macos/entitlements.plist" \
     --sign "$SIGN_ID" \
     "$APP_BUNDLE"
 else
   echo "[build] Signing ad-hoc with entitlements..."
-  codesign --force --deep \
+  codesign --force \
     --entitlements "$ROOT_DIR/macos/entitlements.plist" \
     --sign - \
     "$APP_BUNDLE"
