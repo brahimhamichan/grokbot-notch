@@ -432,3 +432,15 @@ body.browser-preview {
 .notch-pouch[data-muted="true"] .mute-btn { background: #f73643; color: #fff; }
 .notch-pouch[data-muted="true"] .mute-btn .mic-on { display: none; }
 .notch-pouch[data-muted="true"] .mute-btn .mic-off { display: block; }
+
+/* Real profile photos (when the bot has one in Grok Bot) */
+.bot-photo {
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  object-fit: cover;
+  display: block;
+}
+#bot-mark-mount .bot-photo { width: 92px; height: 92px; margin: auto; transition: box-shadow 200ms ease; }
+.notch-pouch[data-call="live"] #bot-mark-mount .bot-photo { box-shadow: 0 0 0 3px var(--bot-ink); }
+.notch-pouch[data-call="connecting"] #bot-mark-mount .bot-photo { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.35); }

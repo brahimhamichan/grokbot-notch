@@ -181,6 +181,22 @@ function syncCharacterToBot(bot) {
   const ink = getFlatBotInk(bot.avatarColor);
   document.documentElement.style.setProperty("--bot-ink", ink);
 
+  // Bots with a profile photo in Grok Bot show it; the rest use their flat character.
+  dom.pouch.dataset.photo = String(Boolean(bot.avatarPhotoUrl));
+  if (bot.avatarPhotoUrl) {
+    if (dom.botMarkMount.dataset.photoFor !== bot.id) {
+      dom.botMarkMount.dataset.photoFor = bot.id;
+      dom.botMarkMount.replaceChildren(Object.assign(new Image(), { src: bot.avatarPhotoUrl, alt: bot.name, className: "bot-photo" }));
+    }
+    dom.collapsedMark.replaceChildren(Object.assign(new Image(), { src: bot.avatarPhotoUrl, alt: "", className: "bot-photo" }));
+    dom.collapsedName.textContent = bot.name;
+    return;
+  }
+  if (dom.botMarkMount.dataset.photoFor) {
+    delete dom.botMarkMount.dataset.photoFor;
+    dom.botMarkMount.replaceChildren();
+  }
+
   // Collapsed bar mini flat mark
   dom.collapsedMark.innerHTML = renderStillSvg({
     body: bodyShape,
@@ -208,7 +224,7 @@ function tickAnimation(now) {
       displaySize: 92,
       extent: "100%"
     });
-    patchSvgDom(dom.botMarkMount, tree);
+    if (!bot.avatarPhotoUrl) patchSvgDom(dom.botMarkMount, tree);
 
   }
   // Waves animate in both states: the expanded pouch and the collapsed notch bar.
