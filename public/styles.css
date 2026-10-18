@@ -152,6 +152,7 @@ body.browser-preview {
   height: 4px;
   border-radius: 99px;
   background: rgba(255, 255, 255, 0.45);
+  transition: height 70ms linear;
 }
 
 .collapsed-waves i:nth-child(2) {

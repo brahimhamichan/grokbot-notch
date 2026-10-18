@@ -111,6 +111,7 @@ const dom = {
   nextBotBtn: document.getElementById("next-bot-btn"),
   audioWavesBtn: document.getElementById("audio-waves-btn"),
   audioWavesBars: document.getElementById("audio-waves-bars"),
+  collapsedWaves: document.querySelector(".collapsed-waves"),
   typeForm: document.getElementById("type-form"),
   typeInput: document.getElementById("type-input")
 };
@@ -208,9 +209,9 @@ function tickAnimation(now) {
     });
     patchSvgDom(dom.botMarkMount, tree);
 
-    // Animate bottom audio wave bars (||||..||l|..)
-    renderAudioWaveBars(now);
   }
+  // Waves animate in both states: the expanded pouch and the collapsed notch bar.
+  renderAudioWaveBars(now);
 
   requestAnimationFrame(tickAnimation);
 }
@@ -218,25 +219,41 @@ function tickAnimation(now) {
 // Idle wave pattern matching whiteboard sketch "||||..||l|.." + live audio reactivity
 const IDLE_WAVE_PATTERN = [11, 14, 10, 15, 4, 4, 12, 16, 9, 13, 4, 4, 11, 15, 9];
 
+// Rolling energy history: during a call each bar is a past moment of audio, so the waveform scrolls left like a live meter.
+const waveHistory = [];
+let smoothedEnergy = 0;
+let lastWaveSample = 0;
+
 function renderAudioWaveBars(now) {
-  const bars = dom.audioWavesBars.querySelectorAll("span");
   const isLive = state.call.phase === "live";
   const isConnecting = state.call.phase === "connecting";
-  const energy = Math.max(0, Math.min(1, state.call.energy));
+  const target = Math.max(0, Math.min(1, state.call.energy));
+  // Fast attack, slower release reads like real speech instead of flicker.
+  smoothedEnergy += (target - smoothedEnergy) * (target > smoothedEnergy ? 0.55 : 0.12);
+  if (now - lastWaveSample > 38) {
+    lastWaveSample = now;
+    waveHistory.push(smoothedEnergy);
+    if (waveHistory.length > 64) waveHistory.shift();
+  }
 
+  const levelAt = (i, count) => waveHistory[waveHistory.length - count + i] ?? 0;
+  const heightFor = (i, count, max, base) => {
+    if (isLive) {
+      const shimmer = 0.85 + 0.15 * Math.sin(now * 0.02 + i * 1.7);
+      return 3 + Math.pow(levelAt(i, count), 0.7) * (max - 3) * shimmer;
+    }
+    if (isConnecting) return 4 + (max * 0.4) * (0.5 + 0.5 * Math.sin(now * 0.008 + i * 0.45));
+    return Math.max(3, base * (0.78 + 0.22 * Math.sin(now * 0.0025 + i * 0.6)));
+  };
+
+  const bars = dom.audioWavesBars.querySelectorAll("span");
   bars.forEach((bar, i) => {
     const base = IDLE_WAVE_PATTERN[i % IDLE_WAVE_PATTERN.length];
-    if (isLive) {
-      const activeMod = 0.45 + 0.55 * Math.abs(Math.sin(now * 0.014 + i * 0.75));
-      const h = 4 + Math.round((base * 0.35 + energy * 18) * activeMod);
-      bar.style.height = `${Math.max(3, Math.min(22, h))}px`;
-    } else if (isConnecting) {
-      const pulse = 4 + Math.round(8 * (0.5 + 0.5 * Math.sin(now * 0.008 + i * 0.45)));
-      bar.style.height = `${pulse}px`;
-    } else {
-      const gentle = Math.round(base * (0.78 + 0.22 * Math.sin(now * 0.0025 + i * 0.6)));
-      bar.style.height = `${Math.max(3, gentle)}px`;
-    }
+    bar.style.height = `${Math.round(Math.min(22, heightFor(i, bars.length, 22, base)))}px`;
+  });
+  const mini = dom.collapsedWaves?.querySelectorAll("i") || [];
+  mini.forEach((bar, i) => {
+    bar.style.height = `${Math.round(Math.min(12, heightFor(i, mini.length, 12, [4, 8, 6, 5][i] || 5)))}px`;
   });
 }
 
