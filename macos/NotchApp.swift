@@ -415,17 +415,12 @@ final class NotchSurface {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate {
     private var surfaces: [NotchSurface] = []
-    private var statusItem: NSStatusItem!
     private let bridge = NodeBridge()
     private let audioController = NativeVoiceAudioController()
     private weak var audioOwner: NotchSurface?
 
     private let panelWidth: CGFloat = 400
-    private let panelHeight: CGFloat = 360
-    private var currentBotName = "Chief"
-    private var currentCallPhase = "idle"
-    private var rosterBots: [[String: String]] = []
-    private var selectedBotId: String = ""
+    private let panelHeight: CGFloat = 384
 
     private var globalMouseMonitor: Any?
     private var globalClickMonitor: Any?
@@ -459,7 +454,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         registerCarbonGlobalHotKeys()
 
         bridge.start()
-        setupStatusItem()
         reconcileSurfaces()
         setupEventMonitors()
 
@@ -688,49 +682,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
     }
 
-    // MARK: - Menu Bar Status Item
-    private func setupStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        updateStatusItemAppearance()
-        rebuildStatusMenu()
-    }
-
-    private func updateStatusItemAppearance() {
-        guard let button = statusItem?.button else { return }
-        if currentCallPhase == "live" || currentCallPhase == "connecting" {
-            button.title = "🎙️ \(currentBotName)"
-        } else {
-            button.title = "✦ \(currentBotName)"
-        }
-    }
-
-    private func rebuildStatusMenu() {
-        let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Toggle GrokBot Notch (⌥Space)", action: #selector(toggleNotchExpand), keyEquivalent: ""))
-        let callTitle = (currentCallPhase == "idle") ? "Start Voice Call with \(currentBotName) (⌘⇧G)" : "End Voice Call (\(currentBotName))"
-        menu.addItem(NSMenuItem(title: callTitle, action: #selector(toggleVoiceCall), keyEquivalent: ""))
-        menu.addItem(NSMenuItem.separator())
-
-        if !rosterBots.isEmpty {
-            let header = NSMenuItem(title: "Bots", action: nil, keyEquivalent: "")
-            header.isEnabled = false
-            menu.addItem(header)
-            for bot in rosterBots {
-                guard let id = bot["id"], let name = bot["name"] else { continue }
-                let item = NSMenuItem(title: name, action: #selector(selectBotFromMenu(_:)), keyEquivalent: "")
-                item.representedObject = id
-                item.state = (id == selectedBotId) ? .on : .off
-                menu.addItem(item)
-            }
-            menu.addItem(NSMenuItem.separator())
-        }
-
-        menu.addItem(NSMenuItem(title: "Open Desktop Grok Bot.app", action: #selector(openDesktopApp), keyEquivalent: "o"))
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit GrokBot Notch", action: #selector(quitApp), keyEquivalent: "q"))
-        statusItem.menu = menu
-    }
-
     // ⌥Space: opens on the screen under the cursor with keyboard focus (type to message, Enter to call, ←/→ to switch).
     @objc func toggleNotchExpand() {
         guard let s = activeSurface else { return }
@@ -782,13 +733,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         openSurface?.send(["action": "escape"])
     }
 
-    @objc private func selectBotFromMenu(_ sender: NSMenuItem) {
-        guard let botId = sender.representedObject as? String, let s = activeSurface else { return }
-        selectedBotId = botId
-        focus(s)
-        s.send(["action": "selectBot", "botId": botId])
-    }
-
     @objc private func openDesktopApp() {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Grok Bot.app"))
     }
@@ -833,22 +777,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 surface.cursorVisitedOpenPouch = false
             }
 
-            if let botName = body["botName"] as? String, !botName.isEmpty {
-                currentBotName = botName
-            }
-            currentCallPhase = callSurface?.callPhase ?? "idle"
             refreshGlobalHotKeys()
-            updateStatusItemAppearance()
-            rebuildStatusMenu()
 
-        case "rosterLoaded":
-            if let bots = body["bots"] as? [[String: String]] {
-                rosterBots = bots
-            }
-            if let sel = body["selectedBotId"] as? String {
-                selectedBotId = sel
-            }
-            rebuildStatusMenu()
+        case "quit":
+            NSApp.terminate(nil)
 
         case "setPref":
             guard let key = body["key"] as? String, prefs[key] != nil, let value = body["value"] as? Bool else { return }

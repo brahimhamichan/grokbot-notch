@@ -466,7 +466,7 @@ body.browser-preview {
 .settings-view { display: none; }
 .notch-pouch[data-expanded="true"][data-settings="true"] {
   width: 300px;
-  height: 328px;
+  height: 360px;
 }
 .notch-pouch[data-expanded="true"][data-settings="true"] .expanded-content { display: none; }
 .notch-pouch[data-expanded="true"][data-settings="true"] .settings-view {
@@ -609,3 +609,17 @@ body.browser-preview {
 }
 /* The expanded-content clip box sits on top; it must not swallow clicks meant for the settings screen. */
 .notch-pouch[data-settings="true"] .expanded-clip { display: none; }
+
+/* App actions (formerly the menu bar menu) live in the settings footer */
+.settings-footer { display: flex; justify-content: space-between; padding: 0 4px; }
+.settings-link {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11.5px;
+  padding: 2px;
+  cursor: pointer;
+}
+.settings-link:hover { color: var(--text-primary); }
+.settings-quit:hover { color: #f73643; }

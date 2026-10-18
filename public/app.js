@@ -1055,6 +1055,11 @@ dom.settingsBtn.addEventListener("click", (e) => {
   setSettingsOpen(true);
 });
 dom.settingsCloseBtn.addEventListener("click", () => setSettingsOpen(false));
+document.getElementById("settings-quit-btn").addEventListener("click", () => postNativeMessage({ type: "quit" }));
+document.getElementById("settings-open-app-btn").addEventListener("click", () => {
+  const bot = getSelectedBot();
+  fetch(`/api/bot/${encodeURIComponent(bot?.id || "none")}/open-desktop`, { method: "POST" }).catch(() => {});
+});
 dom.settingsVoice.addEventListener("change", () => saveVoiceSettings({ voiceId: dom.settingsVoice.value }));
 dom.settingsSpeed.addEventListener("click", (e) => {
   const speed = e.target.closest("button")?.dataset.speed;
