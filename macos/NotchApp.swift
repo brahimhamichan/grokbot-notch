@@ -2,6 +2,7 @@ import Cocoa
 import WebKit
 import AVFoundation
 import Carbon
+import Speech
 
 // Global reference for Carbon HotKey C callback
 private weak var sharedAppDelegate: AppDelegate?
@@ -22,7 +23,13 @@ private func carbonHotKeyHandler(
         nil,
         &hotKeyID
     )
-    if status == noErr {
+    let isRelease = GetEventKind(theEvent) == UInt32(kEventHotKeyReleased)
+    if status == noErr && hotKeyID.id == 8 {
+        // Space is push-to-talk: it needs both press and release.
+        DispatchQueue.main.async { sharedAppDelegate?.voiceNoteKey(down: !isRelease) }
+        return noErr
+    }
+    if status == noErr && !isRelease {
         DispatchQueue.main.async {
             switch hotKeyID.id {
             case 1:
@@ -153,6 +160,110 @@ final class NodeBridge {
         let handle = try? FileHandle(forWritingTo: file)
         handle?.truncateFile(atOffset: 0)
         return handle
+    }
+}
+
+// MARK: - Voice Notes (hold-to-talk recording, local playback, on-device transcription)
+final class VoiceNoteRecorder: NSObject, AVAudioPlayerDelegate {
+    weak var webView: WKWebView?
+    private var recorder: AVAudioRecorder?
+    private var player: AVAudioPlayer?
+    private var meterTimer: Timer?
+    private var started = Date()
+    private let fileURL: URL = {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("GrokBotNotch", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        return dir.appendingPathComponent("voice-note.m4a")
+    }()
+
+    private func emit(_ payload: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
+        webView?.evaluateJavaScript("window.__voiceNote && window.__voiceNote(\(json))", completionHandler: nil)
+    }
+
+    func start() {
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            DispatchQueue.main.async {
+                guard granted else { return self.emit(["event": "error", "message": "Mic blocked — allow GrokBot Notch in Settings › Privacy › Microphone"]) }
+                self.discard()
+                let settings: [String: Any] = [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44100, AVNumberOfChannelsKey: 1, AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue]
+                guard let rec = try? AVAudioRecorder(url: self.fileURL, settings: settings) else { return self.emit(["event": "error", "message": "Couldn't start recording"]) }
+                rec.isMeteringEnabled = true
+                rec.record()
+                self.recorder = rec
+                self.started = Date()
+                self.emit(["event": "started"])
+                self.meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+                    guard let self, let rec = self.recorder else { return }
+                    rec.updateMeters()
+                    let level = pow(10, rec.averagePower(forChannel: 0) / 20) // dBFS -> 0...1
+                    self.emit(["event": "level", "level": Double(level), "seconds": Date().timeIntervalSince(self.started)])
+                }
+            }
+        }
+    }
+
+    func stop() {
+        meterTimer?.invalidate()
+        meterTimer = nil
+        guard let rec = recorder else { return }
+        let seconds = rec.currentTime
+        rec.stop()
+        recorder = nil
+        emit(["event": "stopped", "seconds": seconds])
+    }
+
+    func play() {
+        guard let p = player ?? (try? AVAudioPlayer(contentsOf: fileURL)) else { return }
+        player = p
+        p.delegate = self
+        p.play()
+        emit(["event": "playback", "playing": true])
+    }
+
+    func pause() {
+        player?.pause()
+        emit(["event": "playback", "playing": false])
+    }
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        emit(["event": "playback", "playing": false])
+    }
+
+    func discard() {
+        meterTimer?.invalidate()
+        meterTimer = nil
+        recorder?.stop()
+        recorder = nil
+        player?.stop()
+        player = nil
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+
+    // Security/privacy: transcription runs on-device when the Mac supports it; the audio never leaves this Mac.
+    func transcribe(done: @escaping () -> Void) {
+        player?.stop()
+        player = nil
+        SFSpeechRecognizer.requestAuthorization { status in
+            DispatchQueue.main.async {
+                guard status == .authorized, let recognizer = SFSpeechRecognizer(), recognizer.isAvailable else {
+                    self.emit(["event": "error", "message": "Allow Speech Recognition for GrokBot Notch in Settings › Privacy"])
+                    return done()
+                }
+                let request = SFSpeechURLRecognitionRequest(url: self.fileURL)
+                if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+                request.shouldReportPartialResults = false
+                recognizer.recognitionTask(with: request) { result, error in
+                    guard error != nil || result?.isFinal == true else { return }
+                    DispatchQueue.main.async {
+                        let text = result?.bestTranscription.formattedString ?? ""
+                        self.emit(text.isEmpty ? ["event": "error", "message": "Couldn't hear anything in that note"] : ["event": "transcript", "text": text])
+                        self.discard()
+                        done()
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -391,6 +502,7 @@ final class NotchSurface {
     var hitRect = NSRect(x: 94, y: 0, width: 212, height: 56)
     var isOpen = false
     var isTyping = false
+    var keepOpen = false // unsent draft text or voice note
     var callPhase = "idle"
     var openedByHover = false
     var cursorVisitedOpenPouch = false
@@ -420,7 +532,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private weak var audioOwner: NotchSurface?
 
     private let panelWidth: CGFloat = 400
-    private let panelHeight: CGFloat = 384
+    private let panelHeight: CGFloat = 420
 
     private var globalMouseMonitor: Any?
     private var globalClickMonitor: Any?
@@ -432,6 +544,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private var escapeHotKeyRef: EventHotKeyRef?
     private var muteHotKeyRef: EventHotKeyRef?
     private var settingsHotKeyRef: EventHotKeyRef?
+    private var spaceHotKeyRef: EventHotKeyRef?
+    private let voiceNotes = VoiceNoteRecorder()
     private var navHotKeysState: (active: Bool, arrows: Bool) = (false, false)
     private let hoverOpenDelay = 0.15
     private let hoverCloseDelay = 0.12
@@ -443,7 +557,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             "showOnAllScreens": defaults.object(forKey: "showOnAllScreens") as? Bool ?? true,
             "hoverToOpen": defaults.object(forKey: "hoverToOpen") as? Bool ?? true,
             "sounds": defaults.object(forKey: "sounds") as? Bool ?? true,
-            "swipeToSwitch": defaults.object(forKey: "swipeToSwitch") as? Bool ?? false
+            "swipeToSwitch": defaults.object(forKey: "swipeToSwitch") as? Bool ?? false,
+            "reviewVoiceNotes": defaults.object(forKey: "reviewVoiceNotes") as? Bool ?? false
         ]
     }
 
@@ -493,8 +608,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
     // MARK: - Carbon Global HotKeys (Works Across All Apps Without Accessibility Prompts)
     private func registerCarbonGlobalHotKeys() {
-        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), carbonHotKeyHandler, 1, &eventType, nil, nil)
+        var eventTypes = [
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))
+        ]
+        InstallEventHandler(GetApplicationEventTarget(), carbonHotKeyHandler, 2, &eventTypes, nil, nil)
         // ⌥Space toggles the notch; ⌘⇧G starts/ends a voice call.
         RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), EventHotKeyID(signature: OSType(0x47424E31), id: 1), GetApplicationEventTarget(), 0, &toggleHotKeyRef)
         RegisterEventHotKey(UInt32(kVK_ANSI_G), UInt32(cmdKey | shiftKey), EventHotKeyID(signature: OSType(0x47424E32), id: 2), GetApplicationEventTarget(), 0, &voiceHotKeyRef)
@@ -542,6 +660,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let targetIDs = Set(targets.map(displayID))
         for surface in surfaces where !targetIDs.contains(surface.screenID) {
             if surface === audioOwner { audioController.stop() }
+            if surface === voiceNoteOwner { voiceNotes.discard() }
             surface.panel.orderOut(nil)
             surface.webView.configuration.userContentController.removeScriptMessageHandler(forName: "notchHost")
         }
@@ -626,7 +745,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             guard let self = self else { return }
             let mouse = NSEvent.mouseLocation
-            for surface in self.surfaces where surface.isOpen && !surface.hitRect.insetBy(dx: -10, dy: -10).contains(surface.localPoint(mouse)) {
+            for surface in self.surfaces where surface.isOpen && !surface.keepOpen && !surface.hitRect.insetBy(dx: -10, dy: -10).contains(surface.localPoint(mouse)) {
                 surface.send(["action": "collapse"])
             }
         }
@@ -667,10 +786,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             }
             s.hoverWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + hoverOpenDelay, execute: work)
-        } else if s.isOpen && !nearOpenPouch && !s.isTyping && (s.openedByHover || s.cursorVisitedOpenPouch) {
+        } else if s.isOpen && !nearOpenPouch && !s.isTyping && !s.keepOpen && (s.openedByHover || s.cursorVisitedOpenPouch) {
             guard s.hoverWork == nil else { return }
             let work = DispatchWorkItem { [weak s] in
-                guard let s = s, s.isOpen, !s.isTyping else { return }
+                guard let s = s, s.isOpen, !s.isTyping, !s.keepOpen else { return }
                 s.hoverWork = nil
                 s.send(["action": "collapse"])
             }
@@ -745,6 +864,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let open = openSurface
         setNavigationHotKeys(active: open != nil, includeArrows: open.map { !$0.isTyping } ?? false)
         updateMuteHotKey(active: callSurface != nil)
+        // Hold-Space push-to-talk: only while a notch is open, nobody is typing, and no call is running.
+        let wantSpace = open.map { !$0.isTyping } == true && callSurface == nil
+        if wantSpace, spaceHotKeyRef == nil {
+            RegisterEventHotKey(UInt32(kVK_Space), 0, EventHotKeyID(signature: OSType(0x47424E38), id: 8), GetApplicationEventTarget(), 0, &spaceHotKeyRef)
+        } else if !wantSpace, let hk = spaceHotKeyRef {
+            UnregisterEventHotKey(hk)
+            spaceHotKeyRef = nil
+        }
+    }
+
+    private weak var voiceNoteOwner: NotchSurface?
+
+    func voiceNoteKey(down: Bool) {
+        guard let s = voiceNoteOwner ?? openSurface else { return }
+        s.send(["action": "voiceNoteKey", "down": down])
     }
 
     // MARK: - WKScriptMessageHandler & WKUIDelegate
@@ -763,6 +897,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             let wasOpen = surface.isOpen
             surface.isOpen = (body["isOpen"] as? Bool) ?? false
             surface.isTyping = (body["isTyping"] as? Bool) ?? false
+            surface.keepOpen = (body["keepOpen"] as? Bool) ?? false
             surface.callPhase = (body["callPhase"] as? String) ?? "idle"
 
             if surface.isOpen && !wasOpen {
@@ -781,6 +916,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
         case "quit":
             NSApp.terminate(nil)
+
+        case "voiceNote":
+            voiceNoteOwner = surface
+            voiceNotes.webView = surface.webView
+            switch body["op"] as? String {
+            case "start": voiceNotes.start()
+            case "stop": voiceNotes.stop()
+            case "play": voiceNotes.play()
+            case "pause": voiceNotes.pause()
+            case "discard": voiceNotes.discard(); voiceNoteOwner = nil
+            case "transcribe": voiceNotes.transcribe { [weak self] in self?.voiceNoteOwner = nil }
+            default: break
+            }
 
         case "setPref":
             guard let key = body["key"] as? String, prefs[key] != nil, let value = body["value"] as? Bool else { return }

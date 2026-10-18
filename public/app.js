@@ -89,7 +89,7 @@ const state = {
   activeAccountScope: null,
   bots: [],
   voices: [],
-  prefs: { sounds: true, hoverToOpen: true, showOnAllScreens: true, swipeToSwitch: false },
+  prefs: { sounds: true, hoverToOpen: true, showOnAllScreens: true, swipeToSwitch: false, reviewVoiceNotes: false },
   settingsOpen: false,
   selectedBotId: null,
   statusCaption: "",
@@ -315,6 +315,7 @@ function reportHitRectToNative() {
     height: Math.round(rect.height),
     isOpen: state.expanded,
     isTyping: state.typing || state.settingsOpen, // settings, like typing, keeps the notch open and frees the arrow keys
+    keepOpen: (voiceNote?.phase ?? "none") !== "none" || dom.typeInput.value.trim().length > 0, // unsent drafts pin the notch open
     callPhase: state.call.phase,
     botName: bot?.name || "Grok Bot"
   });
@@ -1145,6 +1146,11 @@ dom.typeForm.addEventListener("submit", async (e) => {
   }
   dom.typeInput.value = "";
   setTypingMode(false);
+  await sendTextMessage(text);
+});
+
+// Sends a written (or transcribed voice-note) message to the selected bot and shows its reply.
+async function sendTextMessage(text) {
   playUiSound("doubleTick");
 
   const bot = getSelectedBot();
@@ -1220,7 +1226,105 @@ dom.typeForm.addEventListener("submit", async (e) => {
     state.statusCaption = err.message || "Failed to send";
     renderPouch();
   }
+}
+
+// ============================================================================
+// VOICE NOTES (hold Space or tap the mic; send on release, or review first)
+// ============================================================================
+var voiceNote = { phase: "none", seconds: 0, playing: false, levels: [] };
+const vnDom = {
+  btn: document.getElementById("voice-note-btn"),
+  rec: document.getElementById("voice-note-rec"),
+  meter: document.getElementById("voice-note-meter"),
+  time: document.getElementById("voice-note-time"),
+  draft: document.getElementById("voice-note-draft"),
+  duration: document.getElementById("vn-duration")
+};
+const fmtSeconds = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+function setVoiceNotePhase(phase) {
+  voiceNote.phase = phase;
+  dom.pouch.dataset.voiceNote = phase;
+  vnDom.rec.hidden = phase !== "recording";
+  vnDom.draft.hidden = phase !== "draft";
+  vnDom.btn.setAttribute("aria-pressed", String(phase === "recording"));
+  vnDom.draft.dataset.playing = "false";
+  if (phase === "recording") {
+    voiceNote.levels = [];
+    vnDom.meter.replaceChildren();
+    vnDom.time.textContent = "0:00";
+  }
+  if (phase === "draft") vnDom.duration.textContent = fmtSeconds(voiceNote.seconds);
+  reportHitRectToNative();
+}
+
+function startVoiceNote() {
+  if (voiceNote.phase === "recording" || state.call.phase !== "idle") return;
+  if (voiceNote.phase === "draft") postNativeMessage({ type: "voiceNote", op: "discard" });
+  setTypingMode(false);
+  setVoiceNotePhase("recording");
+  playUiSound("tick");
+  postNativeMessage({ type: "voiceNote", op: "start" });
+}
+
+function stopVoiceNote() {
+  if (voiceNote.phase !== "recording") return;
+  postNativeMessage({ type: "voiceNote", op: "stop" });
+}
+
+function sendVoiceNote() {
+  setVoiceNotePhase("sending");
+  state.statusCaption = "Transcribing…";
+  renderPouch();
+  postNativeMessage({ type: "voiceNote", op: "transcribe" });
+}
+
+function discardVoiceNote() {
+  postNativeMessage({ type: "voiceNote", op: "discard" });
+  setVoiceNotePhase("none");
+}
+
+window.__voiceNote = (msg) => {
+  switch (msg.event) {
+    case "level": {
+      if (voiceNote.phase !== "recording") return;
+      vnDom.time.textContent = fmtSeconds(msg.seconds);
+      const bar = document.createElement("i");
+      bar.style.height = `${Math.round(3 + Math.min(1, Math.sqrt(msg.level) * 1.8) * 15)}px`;
+      vnDom.meter.append(bar);
+      if (vnDom.meter.childElementCount > 60) vnDom.meter.firstElementChild.remove();
+      break;
+    }
+    case "stopped":
+      voiceNote.seconds = msg.seconds;
+      if (msg.seconds < 0.4) return discardVoiceNote(); // accidental tap
+      if (state.prefs.reviewVoiceNotes) setVoiceNotePhase("draft");
+      else sendVoiceNote();
+      break;
+    case "playback":
+      vnDom.draft.dataset.playing = String(Boolean(msg.playing));
+      break;
+    case "transcript":
+      setVoiceNotePhase("none");
+      sendTextMessage(msg.text);
+      break;
+    case "error":
+      setVoiceNotePhase("none");
+      state.statusCaption = msg.message;
+      renderPouch();
+      break;
+  }
+};
+
+vnDom.btn.addEventListener("pointerdown", (e) => e.preventDefault());
+vnDom.btn.addEventListener("click", () => (voiceNote.phase === "recording" ? stopVoiceNote() : startVoiceNote()));
+document.getElementById("vn-discard").addEventListener("click", discardVoiceNote);
+document.getElementById("vn-rerecord").addEventListener("click", startVoiceNote);
+document.getElementById("vn-send").addEventListener("click", sendVoiceNote);
+document.getElementById("vn-play").addEventListener("click", () => {
+  postNativeMessage({ type: "voiceNote", op: vnDom.draft.dataset.playing === "true" ? "pause" : "play" });
 });
+dom.typeInput.addEventListener("input", reportHitRectToNative);
 
 function toggleSettings() {
   if (!state.expanded) setExpanded(true);
@@ -1297,6 +1401,14 @@ window.__notchCommand = async (cmd) => {
       break;
     case "collapse":
       setExpanded(false);
+      break;
+    case "voiceNoteKey":
+      if (cmd.down) {
+        if (!state.expanded || state.typing || state.settingsOpen || voiceNote.phase === "draft" || voiceNote.phase === "sending") break;
+        startVoiceNote();
+      } else {
+        stopVoiceNote();
+      }
       break;
     case "toggleSettings":
       toggleSettings();

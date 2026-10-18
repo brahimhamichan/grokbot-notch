@@ -45,6 +45,7 @@ swiftc -O \
   -framework WebKit \
   -framework AVFoundation \
   -framework Carbon \
+  -framework Speech \
   "$ROOT_DIR/macos/NotchApp.swift" \
   -o "$MACOS_DIR/GrokBotNotch"
 
