@@ -620,7 +620,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             handleMouseMove()
         })
 
-        // Clicking outside never collapses the notch; close it with ⌥Space or Esc.
+        // Clicking outside the expanded notch collapses it (an active call keeps running in the collapsed bar).
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
+            guard let self = self, self.isNotchOpen, let panel = self.panel else { return }
+            let mouseScreen = NSEvent.mouseLocation
+            let localX = mouseScreen.x - panel.frame.minX
+            let localTopY = panel.frame.maxY - mouseScreen.y
+            if !self.hitRectInPanel.insetBy(dx: -10, dy: -10).contains(NSPoint(x: localX, y: localTopY)) {
+                self.sendCommandToWeb(["action": "collapse"])
+            }
+        })
 
         localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown], handler: { event in
             handleMouseMove()
