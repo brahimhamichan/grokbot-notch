@@ -44,6 +44,16 @@
             </span>
           </button>
 
+          <!-- Mute toggle (only shown during a call) -->
+          <button id="mute-btn" class="mute-btn" type="button" aria-label="Mute microphone" title="Mute microphone (⌘⇧M)" aria-pressed="false">
+            <svg class="mic-on" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+            </svg>
+            <svg class="mic-off" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M15 9.5V6a3 3 0 0 0-5.7-1.3M9 9v2a3 3 0 0 0 4.6 2.5M5 11a7 7 0 0 0 11.3 5.5M19 11a7 7 0 0 1-.6 2.8M12 18v3M3 3l18 18" />
+            </svg>
+          </button>
+
           <!-- Middle: Bot Name + Subtle Live Caption/Status -->
           <div class="bot-title-block">
             <span id="bot-name-label" class="bot-name-label">Chief</span>

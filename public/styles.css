@@ -407,3 +407,28 @@ body.browser-preview {
   color: var(--text-muted);
   text-align: left;
 }
+
+/* Mute toggle: top-right of the pouch, visible only while a call is connecting or live */
+.mute-btn {
+  position: absolute;
+  top: 44px;
+  right: 22px;
+  width: 30px;
+  height: 30px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+.mute-btn:hover { background: rgba(255, 255, 255, 0.18); }
+.notch-pouch[data-expanded="true"][data-call="live"] .mute-btn,
+.notch-pouch[data-expanded="true"][data-call="connecting"] .mute-btn { display: inline-flex; }
+.mute-btn .mic-off { display: none; }
+.notch-pouch[data-muted="true"] .mute-btn { background: #f73643; color: #fff; }
+.notch-pouch[data-muted="true"] .mute-btn .mic-on { display: none; }
+.notch-pouch[data-muted="true"] .mute-btn .mic-off { display: block; }

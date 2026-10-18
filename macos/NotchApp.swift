@@ -35,6 +35,8 @@ private func carbonHotKeyHandler(
                 sharedAppDelegate?.cycleNextBot()
             case 5:
                 sharedAppDelegate?.handleEscapeKey()
+            case 6:
+                sharedAppDelegate?.toggleMute()
             default:
                 break
             }
@@ -206,7 +208,12 @@ final class NativeVoiceAudioController {
 
     func start() {
         AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-            guard granted else { return }
+            guard granted else {
+                DispatchQueue.main.async {
+                    self?.webView?.evaluateJavaScript("window.__onNativeMicDenied && window.__onNativeMicDenied()", completionHandler: nil)
+                }
+                return
+            }
             DispatchQueue.main.async {
                 self?.setupAndStartEngine()
             }
@@ -230,15 +237,29 @@ final class NativeVoiceAudioController {
         eng.connect(player, to: eng.mainMixerNode, format: playFmt)
 
         let inputNode = eng.inputNode
-        let hwFormat = inputNode.inputFormat(forBus: 0)
+        // Apple voice processing = echo cancellation, so the agent doesn't hear itself through the speakers.
+        do {
+            try inputNode.setVoiceProcessingEnabled(true)
+        } catch {
+            NSLog("[GrokBotNotch] Voice processing unavailable: \(error)")
+        }
+        let hwFormat = inputNode.outputFormat(forBus: 0)
         guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else { return }
 
-        guard let conv = AVAudioConverter(from: hwFormat, to: micTargetFmt) else { return }
+        // Voice processing can deliver several channels; only channel 0 carries the cleaned mic signal.
+        guard let monoFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: hwFormat.sampleRate, channels: 1, interleaved: false),
+              let conv = AVAudioConverter(from: monoFmt, to: micTargetFmt) else { return }
         self.converter = conv
+        NSLog("[GrokBotNotch] Mic format: \(hwFormat)")
 
         inputNode.installTap(onBus: 0, bufferSize: 2048, format: hwFormat) { [weak self] buffer, _ in
-            guard let self = self, self.isRunning, !self.isMuted else { return }
-            self.processMicBuffer(buffer, converter: conv, targetFormat: micTargetFmt)
+            guard let self = self, self.isRunning, !self.isMuted,
+                  let src = buffer.floatChannelData?[0],
+                  let mono = AVAudioPCMBuffer(pcmFormat: monoFmt, frameCapacity: buffer.frameLength),
+                  let dst = mono.floatChannelData?[0] else { return }
+            mono.frameLength = buffer.frameLength
+            dst.update(from: src, count: Int(buffer.frameLength))
+            self.processMicBuffer(mono, converter: conv, targetFormat: micTargetFmt)
         }
 
         do {
@@ -385,6 +406,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private var leftArrowHotKeyRef: EventHotKeyRef?
     private var rightArrowHotKeyRef: EventHotKeyRef?
     private var escapeHotKeyRef: EventHotKeyRef?
+    private var muteHotKeyRef: EventHotKeyRef?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         sharedAppDelegate = self
@@ -598,17 +620,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             handleMouseMove()
         })
 
-        // Collapse when clicking outside the expanded notch (if no voice call is active)
-        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
-            guard let self = self, self.isNotchOpen, self.currentCallPhase == "idle", let panel = self.panel else { return }
-            let mouseScreen = NSEvent.mouseLocation
-            let panelFrame = panel.frame
-            let localX = mouseScreen.x - panelFrame.minX
-            let localTopY = panelFrame.maxY - mouseScreen.y
-            if !self.hitRectInPanel.insetBy(dx: -10, dy: -10).contains(NSPoint(x: localX, y: localTopY)) {
-                self.sendCommandToWeb(["action": "toggleExpand"])
-            }
-        })
+        // Clicking outside never collapses the notch; close it with ⌥Space or Esc.
 
         localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown], handler: { event in
             handleMouseMove()
@@ -711,6 +723,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         sendCommandToWeb(["action": "toggleVoiceCall"])
     }
 
+    func toggleMute() {
+        sendCommandToWeb(["action": "toggleMute"])
+    }
+
+    // ⌘⇧M is only claimed while a call is in progress, so other apps keep it otherwise.
+    private func updateMuteHotKey(active: Bool) {
+        if active, muteHotKeyRef == nil {
+            RegisterEventHotKey(UInt32(kVK_ANSI_M), UInt32(cmdKey | shiftKey), EventHotKeyID(signature: OSType(0x47424E36), id: 6), GetApplicationEventTarget(), 0, &muteHotKeyRef)
+        } else if !active, let hk = muteHotKeyRef {
+            UnregisterEventHotKey(hk)
+            muteHotKeyRef = nil
+        }
+    }
+
     func cyclePrevBot() {
         sendCommandToWeb(["action": "prevBot"])
     }
@@ -777,6 +803,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             if let phase = body["callPhase"] as? String {
                 currentCallPhase = phase
             }
+            updateMuteHotKey(active: currentCallPhase != "idle")
             updateStatusItemAppearance()
             rebuildStatusMenu()
 

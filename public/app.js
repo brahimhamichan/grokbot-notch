@@ -113,7 +113,8 @@ const dom = {
   audioWavesBars: document.getElementById("audio-waves-bars"),
   collapsedWaves: document.querySelector(".collapsed-waves"),
   typeForm: document.getElementById("type-form"),
-  typeInput: document.getElementById("type-input")
+  typeInput: document.getElementById("type-input"),
+  muteBtn: document.getElementById("mute-btn")
 };
 
 function getSelectedBot() {
@@ -243,7 +244,7 @@ function renderAudioWaveBars(now) {
       return 3 + Math.pow(levelAt(i, count), 0.7) * (max - 3) * shimmer;
     }
     if (isConnecting) return 4 + (max * 0.4) * (0.5 + 0.5 * Math.sin(now * 0.008 + i * 0.45));
-    return Math.max(3, base * (0.78 + 0.22 * Math.sin(now * 0.0025 + i * 0.6)));
+    return Math.max(3, base * 0.5); // Static when no call is in progress.
   };
 
   const bars = dom.audioWavesBars.querySelectorAll("span");
@@ -356,11 +357,15 @@ class VoiceAudioPipeline {
   async start() {
     if (this.useNativeAudio) {
       window.__onNativeMicFrame = (base64Pcm, rms) => {
-        this.onEnergy?.(Math.min(1, rms * 4.5));
+        this.onEnergy?.(Math.min(1, Math.sqrt(rms) * 2.2));
         this.onPcm16Base64(base64Pcm);
       };
       window.__onNativeSpeakerEnergy = (rms) => {
         this.onEnergy?.(Math.min(1, rms * 3.8));
+      };
+      window.__onNativeMicDenied = () => {
+        state.statusCaption = "Mic blocked — allow GrokBot Notch in Settings › Privacy › Microphone";
+        renderPouch();
       };
       window.__onNativeSpeechEnded = () => {
         for (const r of this.speechDrainedResolvers.splice(0)) r();
@@ -872,6 +877,14 @@ async function handleVoiceToolCall({ ws, audioPipeline, bot, callId, plan, toolC
   }
 }
 
+function toggleMute() {
+  if (state.call.phase === "idle") return;
+  state.call.isMuted = !state.call.isMuted;
+  postNativeMessage({ type: "audioSetMuted", muted: state.call.isMuted });
+  playUiSound("tick");
+  renderPouch();
+}
+
 async function stopVoiceCall({ silentChime = false } = {}) {
   const wasLive = state.call.phase === "live";
   if (transcriptPollInterval) {
@@ -896,7 +909,9 @@ async function stopVoiceCall({ silentChime = false } = {}) {
 
   state.call.phase = "idle";
   state.call.activity = "quiet";
+  state.call.isMuted = false;
   state.call.energy = 0;
+  postNativeMessage({ type: "audioSetMuted", muted: false });
   state.statusCaption = "";
   renderPouch();
   reportHitRectToNative();
@@ -912,6 +927,9 @@ function renderPouch() {
   syncCharacterToBot(bot);
 
   dom.pouch.dataset.call = state.call.phase;
+  dom.pouch.dataset.muted = String(state.call.phase !== "idle" && state.call.isMuted);
+  dom.muteBtn.setAttribute("aria-pressed", String(state.call.isMuted));
+  dom.muteBtn.title = state.call.isMuted ? "Unmute microphone (⌘⇧M)" : "Mute microphone (⌘⇧M)";
   dom.botNameLabel.textContent = bot.name;
   dom.typeInput.placeholder = `Message ${bot.name}…`;
 
@@ -959,6 +977,11 @@ function cycleBot(delta) {
 // ============================================================================
 // EVENTS & SHORTCUTS
 // ============================================================================
+dom.muteBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleMute();
+});
+
 dom.collapsedBar.addEventListener("click", () => {
   setExpanded(true);
 });
@@ -1105,7 +1128,12 @@ window.addEventListener("keydown", (e) => {
 
   if (state.typing) return;
 
-  if (e.key === "ArrowLeft") {
+  if (e.key === "Enter") {
+    // Enter starts or ends a call with the selected bot.
+    e.preventDefault();
+    if (state.call.phase === "idle") startVoiceCall();
+    else stopVoiceCall();
+  } else if (e.key === "ArrowLeft") {
     e.preventDefault();
     cycleBot(-1);
   } else if (e.key === "ArrowRight") {
@@ -1131,6 +1159,9 @@ window.__notchCommand = async (cmd) => {
       } else {
         await stopVoiceCall();
       }
+      break;
+    case "toggleMute":
+      toggleMute();
       break;
     case "nextBot":
       cycleBot(1);
