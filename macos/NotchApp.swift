@@ -724,7 +724,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         statusItem.menu = menu
     }
 
-    // ⌥Space: opens on the screen under the cursor, straight into the text input.
+    // ⌥Space: opens on the screen under the cursor with keyboard focus (type to message, Enter to call, ←/→ to switch).
     @objc func toggleNotchExpand() {
         guard let s = activeSurface else { return }
         if s.isOpen {
@@ -732,7 +732,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         } else {
             reconcileSurfaces()
             focus(s)
-            s.send(["action": "expand", "focusInput": true])
+            s.send(["action": "expand"])
         }
     }
 
