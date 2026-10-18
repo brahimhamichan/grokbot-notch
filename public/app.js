@@ -314,7 +314,7 @@ function reportHitRectToNative() {
     width: Math.round(rect.width),
     height: Math.round(rect.height),
     isOpen: state.expanded,
-    isTyping: state.typing,
+    isTyping: state.typing || state.settingsOpen, // settings, like typing, keeps the notch open and frees the arrow keys
     callPhase: state.call.phase,
     botName: bot?.name || "Grok Bot"
   });
@@ -1199,7 +1199,17 @@ dom.typeForm.addEventListener("submit", async (e) => {
   }
 });
 
+function toggleSettings() {
+  if (!state.expanded) setExpanded(true);
+  setSettingsOpen(!state.settingsOpen);
+}
+
 window.addEventListener("keydown", (e) => {
+  if (e.metaKey && e.key === ",") {
+    e.preventDefault();
+    toggleSettings();
+    return;
+  }
   if (!state.expanded) return;
   if (state.settingsOpen) {
     if (e.key === "Escape") setSettingsOpen(false);
@@ -1264,6 +1274,9 @@ window.__notchCommand = async (cmd) => {
       break;
     case "collapse":
       setExpanded(false);
+      break;
+    case "toggleSettings":
+      toggleSettings();
       break;
     case "toggleMute":
       toggleMute();

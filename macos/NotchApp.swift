@@ -37,6 +37,8 @@ private func carbonHotKeyHandler(
                 sharedAppDelegate?.handleEscapeKey()
             case 6:
                 sharedAppDelegate?.toggleMute()
+            case 7:
+                sharedAppDelegate?.toggleSettings()
             default:
                 break
             }
@@ -434,6 +436,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private var rightArrowHotKeyRef: EventHotKeyRef?
     private var escapeHotKeyRef: EventHotKeyRef?
     private var muteHotKeyRef: EventHotKeyRef?
+    private var settingsHotKeyRef: EventHotKeyRef?
     private var navHotKeysState: (active: Bool, arrows: Bool) = (false, false)
     private let hoverOpenDelay = 0.15
     private let hoverCloseDelay = 0.12
@@ -478,12 +481,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private func setNavigationHotKeys(active: Bool, includeArrows: Bool) {
         guard navHotKeysState != (active, includeArrows) else { return }
         navHotKeysState = (active, includeArrows)
-        for ref in [leftArrowHotKeyRef, rightArrowHotKeyRef, escapeHotKeyRef] { if let ref { UnregisterEventHotKey(ref) } }
+        for ref in [leftArrowHotKeyRef, rightArrowHotKeyRef, escapeHotKeyRef, settingsHotKeyRef] { if let ref { UnregisterEventHotKey(ref) } }
+        settingsHotKeyRef = nil
         leftArrowHotKeyRef = nil
         rightArrowHotKeyRef = nil
         escapeHotKeyRef = nil
         guard active else { return }
         RegisterEventHotKey(UInt32(kVK_Escape), 0, EventHotKeyID(signature: OSType(0x47424E35), id: 5), GetApplicationEventTarget(), 0, &escapeHotKeyRef)
+        // ⌘, toggles the in-notch settings while the notch is open (even if it was opened by hover without focus).
+        RegisterEventHotKey(UInt32(kVK_ANSI_Comma), UInt32(cmdKey), EventHotKeyID(signature: OSType(0x47424E37), id: 7), GetApplicationEventTarget(), 0, &settingsHotKeyRef)
         if includeArrows {
             RegisterEventHotKey(UInt32(kVK_LeftArrow), 0, EventHotKeyID(signature: OSType(0x47424E33), id: 3), GetApplicationEventTarget(), 0, &leftArrowHotKeyRef)
             RegisterEventHotKey(UInt32(kVK_RightArrow), 0, EventHotKeyID(signature: OSType(0x47424E34), id: 4), GetApplicationEventTarget(), 0, &rightArrowHotKeyRef)
@@ -741,6 +747,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         reconcileSurfaces()
         focus(s)
         s.send(["action": "toggleVoiceCall"])
+    }
+
+    func toggleSettings() {
+        guard let s = openSurface else { return }
+        focus(s)
+        s.send(["action": "toggleSettings"])
     }
 
     func toggleMute() {

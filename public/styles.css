@@ -607,3 +607,5 @@ body.browser-preview {
   pointer-events: none;
   transition: opacity 80ms ease;
 }
+/* The expanded-content clip box sits on top; it must not swallow clicks meant for the settings screen. */
+.notch-pouch[data-settings="true"] .expanded-clip { display: none; }
