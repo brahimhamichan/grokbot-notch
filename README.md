@@ -13,6 +13,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Forked from robzilla1738/grokbot-notch](https://img.shields.io/badge/fork%20of-robzilla1738%2Fgrokbot--notch-lightgrey?logo=github)](https://github.com/robzilla1738/grokbot-notch)
 
+<img src="docs/screenshots/idle.png" width="320" alt="GrokBot Notch with the Trio agent">
+
 </div>
 
 ---
@@ -22,6 +24,12 @@
 This is a security-hardened, extended fork of [**robzilla1738/grokbot-notch**](https://github.com/robzilla1738/grokbot-notch) by Robert Courson. Credit for the original idea, the notch UI and the Motion Lab characters goes to him.
 
 The original runs a local server on `127.0.0.1:4789` with CORS `*` that forwards your Grok Bot session token, which any website you visit could reach. This fork removes that server entirely. See [SECURITY.md](SECURITY.md) and the [changelog](CHANGELOG.md).
+
+## Screenshots
+
+| Ready | Recording a voice note | Settings |
+| :---: | :---: | :---: |
+| ![Ready](docs/screenshots/idle.png) | ![Recording](docs/screenshots/recording.png) | ![Settings](docs/screenshots/settings.png) |
 
 ## Features
 
