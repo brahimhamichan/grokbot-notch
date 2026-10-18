@@ -547,3 +547,18 @@ body.browser-preview {
 }
 .switch:checked { background: var(--bot-ink); }
 .switch:checked::after { transform: translateX(13px); }
+
+/* Collapsed = exactly menu-bar/notch height on every screen: agent pic on the left wing, waveform on the right wing. */
+.notch-pouch {
+  width: calc(var(--notch-width) + 84px);
+  height: var(--notch-height);
+  border-radius: 0 0 12px 12px;
+}
+.collapsed-bar {
+  margin-top: 0;
+  height: var(--notch-height);
+  padding: 0 13px;
+}
+.collapsed-name { display: none; }
+.collapsed-mark { width: 20px; height: 20px; }
+.collapsed-mark svg { width: 100%; height: 100%; }
