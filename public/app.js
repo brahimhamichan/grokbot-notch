@@ -1176,6 +1176,9 @@ window.__notchCommand = async (cmd) => {
         await stopVoiceCall();
       }
       break;
+    case "expand":
+      setExpanded(true);
+      break;
     case "collapse":
       setExpanded(false);
       break;

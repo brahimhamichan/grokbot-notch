@@ -407,6 +407,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private var rightArrowHotKeyRef: EventHotKeyRef?
     private var escapeHotKeyRef: EventHotKeyRef?
     private var muteHotKeyRef: EventHotKeyRef?
+    private var hoverWork: DispatchWorkItem?
+    private var openedByHover = false
+    private var cursorVisitedOpenPouch = false
+    private let hoverOpenDelay = 0.15
+    private let hoverCloseDelay = 0.8
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         sharedAppDelegate = self
@@ -637,6 +642,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         })
     }
 
+    // Hover opens the notch after a short dwell; leaving closes it after a grace period (not while typing).
+    private func scheduleHover(isInside: Bool, localX: CGFloat, localTopY: CGFloat) {
+        let nearOpenPouch = hitRectInPanel.insetBy(dx: -24, dy: -24).contains(NSPoint(x: localX, y: localTopY))
+        // Only auto-close once the cursor has been over the open pouch (so ⌥Space with the mouse elsewhere stays open).
+        if isNotchOpen && nearOpenPouch { cursorVisitedOpenPouch = true }
+        if !isNotchOpen && isInside {
+            guard hoverWork == nil else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self = self, !self.isNotchOpen else { return }
+                self.hoverWork = nil
+                self.openedByHover = true
+                self.sendCommandToWeb(["action": "expand"])
+            }
+            hoverWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + hoverOpenDelay, execute: work)
+        } else if isNotchOpen && !nearOpenPouch && !isTypingInNotch && (openedByHover || cursorVisitedOpenPouch) {
+            guard hoverWork == nil else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self = self, self.isNotchOpen, !self.isTypingInNotch else { return }
+                self.hoverWork = nil
+                self.sendCommandToWeb(["action": "collapse"])
+            }
+            hoverWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + hoverCloseDelay, execute: work)
+        } else {
+            hoverWork?.cancel()
+            hoverWork = nil
+        }
+    }
+
     private func updateMousePassthroughAndGaze() {
         guard let panel = panel else { return }
         let mouseScreen = NSEvent.mouseLocation
@@ -651,6 +686,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if panel.ignoresMouseEvents == isInside {
             panel.ignoresMouseEvents = !isInside
         }
+        scheduleHover(isInside: isInside, localX: localX, localTopY: localTopY)
 
         if isNotchOpen && localTopY >= -20 && localTopY <= panelHeight + 80 && localX >= -120 && localX <= panelWidth + 120 {
             webView?.evaluateJavaScript(
@@ -801,10 +837,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
             if isNotchOpen && !wasOpen {
                 panel.ignoresMouseEvents = false
-                NSApp.activate(ignoringOtherApps: true)
-                panel.makeKeyAndOrderFront(nil)
-                panel.makeFirstResponder(webView)
+                // Hover-open must not steal focus from the current app; hotkey/click opens take focus for typing.
+                if !openedByHover {
+                    NSApp.activate(ignoringOtherApps: true)
+                    panel.makeKeyAndOrderFront(nil)
+                    panel.makeFirstResponder(webView)
+                }
             }
+            if !isNotchOpen { openedByHover = false }
+            if isNotchOpen != wasOpen { hoverWork?.cancel(); hoverWork = nil; cursorVisitedOpenPouch = false }
 
             if let botName = body["botName"] as? String, !botName.isEmpty {
                 currentBotName = botName
