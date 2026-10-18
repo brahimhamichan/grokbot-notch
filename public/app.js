@@ -1067,6 +1067,24 @@ for (const el of dom.prefSwitches) {
   });
 }
 
+// Two-finger horizontal trackpad swipe over the notch switches agents (one switch per gesture).
+let swipeAccum = 0;
+let swipeLockedUntil = 0;
+let swipeResetTimer = null;
+dom.pouch.addEventListener("wheel", (e) => {
+  if (state.settingsOpen || state.typing || Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+  e.preventDefault();
+  clearTimeout(swipeResetTimer);
+  swipeResetTimer = setTimeout(() => { swipeAccum = 0; }, 180);
+  if (performance.now() < swipeLockedUntil) return;
+  swipeAccum += e.deltaX;
+  if (Math.abs(swipeAccum) < 40) return;
+  // Fingers moving left (positive deltaX) go to the next agent, like flipping a page.
+  cycleBot(swipeAccum > 0 ? 1 : -1);
+  swipeAccum = 0;
+  swipeLockedUntil = performance.now() + 450;
+}, { passive: false });
+
 dom.muteBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   toggleMute();
