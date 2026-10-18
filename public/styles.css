@@ -562,3 +562,48 @@ body.browser-preview {
 .collapsed-name { display: none; }
 .collapsed-mark { width: 20px; height: 20px; }
 .collapsed-mark svg { width: 100%; height: 100%; }
+
+/* Smooth open/close: content cross-fades at a fixed size while the pouch itself morphs (no reflow, no pop). */
+/* Clip box follows the morphing pouch, so content never spills outside while it shrinks. */
+.expanded-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.notch-pouch[data-expanded="true"] .expanded-clip { pointer-events: auto; }
+.notch-pouch .expanded-content {
+  display: flex;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 268px;
+  height: 244px;
+  transform: translateX(-50%);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  animation: none;
+  transition: opacity 110ms ease, visibility 0s linear 110ms;
+}
+.notch-pouch[data-expanded="true"] .expanded-content {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  animation: none;
+  transition: opacity 180ms ease 90ms;
+}
+.notch-pouch[data-expanded="true"][data-settings="true"] .expanded-content { display: none; }
+.notch-pouch .collapsed-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transition: opacity 160ms ease 140ms;
+}
+.notch-pouch[data-expanded="true"] .collapsed-bar {
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 80ms ease;
+}

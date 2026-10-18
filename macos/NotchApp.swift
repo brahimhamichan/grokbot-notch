@@ -436,7 +436,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private var muteHotKeyRef: EventHotKeyRef?
     private var navHotKeysState: (active: Bool, arrows: Bool) = (false, false)
     private let hoverOpenDelay = 0.15
-    private let hoverCloseDelay = 0.8
+    private let hoverCloseDelay = 0.12
 
     // App preferences (edited from the in-notch settings screen), persisted in UserDefaults.
     private let defaults = UserDefaults.standard
@@ -653,7 +653,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
     // Hover opens the notch after a short dwell; leaving closes it after a grace period (not while typing).
     private func scheduleHover(_ s: NotchSurface, isInside: Bool, local: NSPoint) {
-        let nearOpenPouch = s.hitRect.insetBy(dx: -24, dy: -24).contains(local)
+        let nearOpenPouch = s.hitRect.insetBy(dx: -4, dy: -4).contains(local)
         // Only auto-close once the cursor has been over the open pouch (so ⌥Space with the mouse elsewhere stays open).
         if s.isOpen && nearOpenPouch { s.cursorVisitedOpenPouch = true }
         if !s.isOpen && isInside && prefs["hoverToOpen"]! {
