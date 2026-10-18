@@ -15,7 +15,7 @@ Run a quick check to ensure the Mac has:
 If you are not already inside the repository directory, clone it and run the automated setup script:
 
 ```bash
-git clone https://github.com/robzilla1738/grokbot-notch.git ~/grokbot-notch
+git clone https://github.com/brahimhamichan/grokbot-notch.git ~/grokbot-notch
 cd ~/grokbot-notch
 npm run setup
 ```

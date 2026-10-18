@@ -1,12 +1,12 @@
 {
   "name": "grokbot-notch",
-  "version": "1.0.0",
-  "description": "Native macOS Notch companion for Desktop Grok Bot with flat Motion Lab characters and live xAI Realtime Voice Mode",
+  "version": "1.1.0",
+  "description": "Hardened native macOS notch companion for Desktop Grok Bot: realtime voice calls, voice notes and chat, with no local network listener",
   "license": "MIT",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/robzilla1738/grokbot-notch.git"
+    "url": "https://github.com/brahimhamichan/grokbot-notch.git"
   },
   "keywords": [
     "grok",
@@ -15,7 +15,10 @@
     "macos",
     "notch",
     "voice-mode",
-    "realtime"
+    "realtime",
+    "voice-notes",
+    "swift",
+    "security"
   ],
   "engines": {
     "node": ">=22.5.0"
@@ -26,5 +29,14 @@
     "start": "./scripts/launch.sh",
     "server": "node server.mjs",
     "build:mac": "./scripts/build-mac-app.sh"
-  }
+  },
+  "homepage": "https://github.com/brahimhamichan/grokbot-notch#readme",
+  "bugs": {
+    "url": "https://github.com/brahimhamichan/grokbot-notch/issues"
+  },
+  "author": "Brahim Hamichan",
+  "contributors": [
+    "Robert Courson (original author, https://github.com/robzilla1738/grokbot-notch)"
+  ],
+  "private": true
 }

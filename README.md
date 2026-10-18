@@ -1,117 +1,99 @@
+<div align="center">
+
 # ✦ GrokBot Notch
 
-**A native macOS Notch companion for Desktop Grok Bot** — lives inside your MacBook's hardware notch, renders your GrokBots in their authentic flat character style, and lets you talk to any of your bots in real time with **xAI Realtime Voice Mode** or quick tap-to-type chat.
+**Talk to your Grok Bots from your Mac's notch.** Realtime voice calls, voice notes and quick chat, with your session kept on your Mac.
 
-[![Platform: macOS 13+](https://img.shields.io/badge/platform-macOS%2013%2B-black?logo=apple)](https://github.com/robzilla1738/grokbot-notch)
-[![Node.js: 22.5+](https://img.shields.io/badge/node-%3E%3D22.5-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org)
-[![License: MIT](https://img.shields.io/badge/license-MIT-violet.svg)](LICENSE)
+[![macOS 13+](https://img.shields.io/badge/macOS-13%2B-000?logo=apple)](#requirements)
+[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-000?logo=apple)](#requirements)
+[![Swift](https://img.shields.io/badge/Swift-AppKit%20%2B%20WebKit-F05138?logo=swift&logoColor=white)](macos/NotchApp.swift)
+[![Node.js bundled](https://img.shields.io/badge/Node.js-24%20bundled-339933?logo=nodedotjs&logoColor=white)](scripts/build-mac-app.sh)
+[![Zero dependencies](https://img.shields.io/badge/npm%20deps-0-brightgreen)](package.json)
+[![No open ports](https://img.shields.io/badge/network%20listeners-none-blueviolet)](SECURITY.md)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Forked from robzilla1738/grokbot-notch](https://img.shields.io/badge/fork%20of-robzilla1738%2Fgrokbot--notch-lightgrey?logo=github)](https://github.com/robzilla1738/grokbot-notch)
 
----
-
-## 🔒 Hardened fork
-
-This fork removes the local HTTP server (`127.0.0.1:4789`) entirely, so no website or other app can reach your Grok Bot session:
-
-- The UI loads from an app-private `gbnotch://` scheme and talks to the Node bridge over stdin/stdout pipes — **no network listener, no CORS**.
-- The Keychain key is read by the signed app (macOS prompts for *GrokBot Notch*), passed over the pipe, and kept **in memory only**; older on-disk copies are deleted.
-- Outbound requests carrying your token are restricted to `https://api2.cursor.sh`; the page has a strict CSP (only `wss://api.x.ai` besides itself), cannot navigate away, and only it can use the mic.
-- Node.js is bundled at a pinned version, verified by SHA-256; no `pkill`/`kill -9` in scripts.
+</div>
 
 ---
 
-## 🤖 Let Your Grok Bot Set This Up For You
+## About this fork
 
-Want your **Grok Bot** to install and launch this for you automatically? Just paste this into your Grok Bot chat:
+This is a security-hardened, extended fork of [**robzilla1738/grokbot-notch**](https://github.com/robzilla1738/grokbot-notch) by Robert Courson. Credit for the original idea, the notch UI and the Motion Lab characters goes to him.
 
-```text
-Set up and launch GrokBot Notch on my Mac from https://github.com/robzilla1738/grokbot-notch — clone it to ~/grokbot-notch, follow AGENTS.md, run `npm run install:app`, and verify it's running at the top of my screen.
-```
+The original runs a local server on `127.0.0.1:4789` with CORS `*` that forwards your Grok Bot session token, which any website you visit could reach. This fork removes that server entirely. See [SECURITY.md](SECURITY.md) and the [changelog](CHANGELOG.md).
 
-*(See [`GROKBOT_SETUP.md`](GROKBOT_SETUP.md) and [`AGENTS.md`](AGENTS.md) for the autonomous agent setup guide.)*
+## Features
 
----
+- **Voice calls** with any of your bots over xAI Realtime, with echo cancellation, barge-in and mute.
+- **Voice notes**: hold Space, talk, release to send. You can turn on review to listen, discard or re-record first. Transcribed on-device.
+- **Chat**: start typing and press Enter.
+- **Lives in the notch** on every screen, at menu-bar height, with your agent's photo and a live waveform.
+- **Hover to peek**, click outside to close. Unsent drafts keep it open.
+- **Settings inside the notch**: voice, speed, sounds, hover, swipe, review voice notes, all screens. Open Grok Bot and Quit are there too, so there's no menu-bar icon.
 
-## ⚡ 1-Command Terminal Setup
+## Install
 
-If you prefer to run it yourself in Terminal:
+Requires [Desktop Grok Bot](#requirements), signed in.
 
 ```bash
-git clone https://github.com/robzilla1738/grokbot-notch.git ~/grokbot-notch
+git clone https://github.com/brahimhamichan/grokbot-notch.git ~/grokbot-notch
 cd ~/grokbot-notch
-npm run setup
-```
-
-To also install `GrokBot Notch.app` into `/Applications`:
-
-```bash
 npm run install:app
 ```
 
----
+This builds `GrokBot Notch.app`, installs it in `/Applications` and launches it. On first run macOS asks for **Keychain** access (choose *Always Allow*), and later for **Microphone** and **Speech Recognition**.
 
-## ✨ Features & Design
+Prefer to let your Grok Bot do it? See [GROKBOT_SETUP.md](GROKBOT_SETUP.md).
 
-- **Starts Collapsed in the Notch → Pops Down on `⌥Space`**
-  - Tucks neatly beneath your MacBook's physical camera housing showing a mini flat mark, your active bot's name, and subtle audio wave bars.
-  - Press **`⌥Space`** from any app (powered by Carbon `RegisterEventHotKey` — works globally across full-screen apps with zero Accessibility permission prompts) or click the notch to pop down the U-shaped black Notch pouch.
-- **Authentic Flat GrokBot Characters**
-  - Renders all **25 procedural Grok Bot shapes** (`hex`, `tablet`, `pebble`, `cloud`, `squircle`, `teardrop`, `star`, `wedge`, `blob`, etc.) in their exact flat dark-mode palette with cutout eyes, eyelid blinking, cursor gaze tracking, and state-driven animations (`idle`, `listening`, `thinking`, `streaming`, `working`).
-  - Automatically syncs your live bots, pinned order, and sections from Desktop Grok Bot (`ListGrokBotAgents` + local `sand-client-persistence`).
-- **Instant Bot Cycling (`←` / `→`)**
-  - Whenever the Notch pouch is popped down, press **`←` Left Arrow** or **`→` Right Arrow** (or click `<` / `>`) to cycle through your GrokBots.
-- **Live xAI Realtime Voice Mode (`wss://api.x.ai/v1/realtime`)**
-  - Click the **Bot Character** (or press **`⌘⇧G`**) to start or end a live Voice Call with the selected GrokBot.
-  - Mints a live `xai-client-secret` via `GrokBotService/MintSandVoiceCallSecret` and loads your bot's exact persona, greeting, and voice tools (`send_task`, `search_conversations`, `end_the_call`) via `GrokBotService/VoiceCallHarnessSession`.
-  - Streams **24,000 Hz mono PCM16** audio over a native Swift `AVAudioEngine` + `AVAudioPlayerNode` pipeline with server VAD, instant barge-in truncation (`conversation.item.truncate`), live background task dispatching (`send_task`), and the authentic Grok Bot E5↔B5 two-tone chimes.
-- **Tap Waves to Type (`||||..||l|..`)**
-  - Tap the bottom audio waves (or just start typing any letter on your keyboard while the Notch is expanded) to morph the waves into a left-aligned text input. Press **`Enter`** to send a message (either directly into the active voice call or as a chat message via `SendGrokBotUserMessage`).
+## Shortcuts
 
----
-
-## ⌨️ Keyboard Shortcuts & Controls
-
-| Action | Shortcut / Gesture |
+| Action | Shortcut |
 | :--- | :--- |
-| **Expand / Collapse Notch** | **`⌥Space`** *(Option + Space)* or click the collapsed notch |
-| **Previous / Next GrokBot** | **`←` / `→`** *(Left / Right Arrows when popped down)* or click **`<` / `>`** |
-| **Start / Stop Voice Call** | **Click the Bot Character** or press **`⌘⇧G`** |
-| **Type a Message** | **Tap the Audio Waves** *(or start typing any letter when popped down)* → **`Enter`** |
-| **Cancel Typing / Close** | **`Esc`** or click outside the Notch pouch |
+| Open / close the notch | `⌥Space`, click, or hover |
+| Switch bot | `←` / `→` |
+| Start / end a call | `Enter` (when not typing) or `⌘⇧G` |
+| Mute during a call | `⌘⇧M` |
+| Voice note | Hold `Space`, or tap the mic |
+| Type a message | Just start typing, then `Enter` |
+| Settings | `⌘,` or the gear |
+| Close | `Esc` or click outside |
 
----
-
-## 🏗️ Architecture
+## How it works
 
 ```text
-grokbot-notch/
-├── macos/
-│   ├── NotchApp.swift        # Native NSPanel + WKWebView hit-testing + AVAudioEngine (24kHz) + Carbon HotKeys
-│   ├── Info.plist            # LSUIElement bundle metadata & NSMicrophoneUsageDescription
-│   └── entitlements.plist    # Audio input & network entitlements
-├── public/
-│   ├── index.html            # Collapsed chin bar + Expanded U-shaped Notch pouch
-│   ├── styles.css            # Pure black hardware-notch geometry, concave ears & spring transitions
-│   ├── app.js                # Realtime WebSocket state machine, VoiceCallHarness tools & UI controller
-│   ├── motion-lab.js         # Flat Grok Bot character engine (shapes, expressions, morphs, gaze)
-│   └── sounds/               # Authentic UI ticks & call chimes
-├── server.mjs                # Local Node.js bridge (auth discovery, ConnectRPC proxy, transcript sync)
-└── scripts/
-    ├── setup.sh              # One-command prerequisite check, build & launch
-    ├── build-mac-app.sh      # Compiles Swift binary & signs GrokBot Notch.app
-    └── launch.sh             # Starts local bridge server & opens GrokBot Notch.app
+┌────────────── GrokBot Notch.app ──────────────┐
+│  WKWebView (gbnotch://, strict CSP)           │
+│        ▲  postMessage                          │
+│  Swift: panels, hotkeys, audio, Keychain       │
+│        ▲  stdin / stdout (JSON lines)          │
+│  Bundled Node bridge (server.mjs)              │
+└────────┬──────────────────────────┬───────────┘
+         ▼                          ▼
+  https://api2.cursor.sh     wss://api.x.ai (voice)
 ```
 
----
+| Path | What it is |
+| :--- | :--- |
+| `macos/NotchApp.swift` | Native app: panels, scheme handler, bridge, audio, voice notes, hotkeys |
+| `server.mjs` | Zero-dependency bridge to Grok Bot's ConnectRPC API |
+| `public/` | Notch UI and Motion Lab character engine |
+| `scripts/` | Setup, build and launch |
 
-## 🔧 Requirements
+## Requirements
 
-- **macOS 13.0+** (Apple Silicon or Intel)
-- **Desktop Grok Bot** (`/Applications/Grok Bot.app`) installed and signed in
-- **Node.js 22.5+** (uses Node's built-in `node:sqlite` — zero `npm install` dependencies required!)
-- **Xcode Command Line Tools** (`swiftc`)
+- macOS 13+ on Apple Silicon. The bundled Node.js is arm64.
+- Desktop Grok Bot installed at `/Applications/Grok Bot.app` and signed in.
+- Xcode Command Line Tools (`xcode-select --install`).
 
----
+## Contributing
 
-## 📄 License
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues privately per [SECURITY.md](SECURITY.md).
 
-[MIT](LICENSE)
+## Disclaimer
+
+An unofficial community project. It is not affiliated with or endorsed by xAI, Grok or Cursor. It uses your own local Grok Bot session.
+
+## License
+
+[MIT](LICENSE). Original work © Robert Courson, fork changes © Brahim Hamichan.

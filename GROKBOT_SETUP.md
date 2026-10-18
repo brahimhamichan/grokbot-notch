@@ -1,18 +1,21 @@
 # Setting Up GrokBot Notch with Your Grok Bot
 
-You can have your own **Grok Bot** install, compile, and launch **GrokBot Notch** on your Mac automatically.
+Your **Grok Bot** can install, build and launch GrokBot Notch for you.
 
-## Copy-Paste Prompt for Your Grok Bot
+## Copy-paste prompt
 
-Copy and paste this into any Grok Bot chat (with local shell/computer tools enabled):
+Paste this into a Grok Bot chat that has local shell tools enabled:
 
 ```text
-Please set up and launch GrokBot Notch on my Mac from https://github.com/robzilla1738/grokbot-notch — clone the repo to ~/grokbot-notch, read AGENTS.md, run `npm run install:app`, verify http://127.0.0.1:4789/api/bootstrap returns my bots, and confirm GrokBot Notch.app is running at the top of my screen.
+Set up and launch GrokBot Notch on my Mac from https://github.com/brahimhamichan/grokbot-notch — clone it to ~/grokbot-notch, read AGENTS.md, run `npm run install:app`, then confirm ~/Library/Logs/GrokBotNotch/bridge.log shows my bots loaded and the notch is visible at the top of my screen.
 ```
 
-## What Your Grok Bot Will Do
+## What it will do
 
-1. Clone `https://github.com/robzilla1738/grokbot-notch` to `~/grokbot-notch`.
-2. Check that `swiftc` (Xcode Command Line Tools) and `node` (v22.5+ with `node:sqlite`) are available.
-3. Compile the native Swift macOS app (`macos/NotchApp.swift`) into `GrokBot Notch.app`, sign it (automatically using your Developer ID / Apple Development certificate if present, or ad-hoc signing otherwise), and copy it to `/Applications/GrokBot Notch.app`.
-4. Start the local Grok Bot bridge server (`http://127.0.0.1:4789`) and open `GrokBot Notch.app` at the top of your primary display.
+1. Clone the repo to `~/grokbot-notch`.
+2. Check that `swiftc` (Xcode Command Line Tools) is available.
+3. Download Node.js at a pinned version, check its SHA-256, and bundle it inside the app.
+4. Build `GrokBot Notch.app`, sign it, and copy it to `/Applications`.
+5. Launch it. macOS will ask once for Keychain access (choose **Always Allow**), then for Microphone and Speech Recognition when you first use them.
+
+The app opens no network port. See [SECURITY.md](SECURITY.md).
