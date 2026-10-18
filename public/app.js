@@ -89,7 +89,7 @@ const state = {
   activeAccountScope: null,
   bots: [],
   voices: [],
-  prefs: { sounds: true, hoverToOpen: true, showOnAllScreens: true },
+  prefs: { sounds: true, hoverToOpen: true, showOnAllScreens: true, swipeToSwitch: false },
   settingsOpen: false,
   selectedBotId: null,
   statusCaption: "",
@@ -1067,12 +1067,12 @@ for (const el of dom.prefSwitches) {
   });
 }
 
-// Two-finger horizontal trackpad swipe over the notch switches agents (one switch per gesture).
+// Optional (off by default, toggle in settings): two-finger horizontal swipe over the notch switches agents.
 let swipeAccum = 0;
 let swipeLockedUntil = 0;
 let swipeResetTimer = null;
 dom.pouch.addEventListener("wheel", (e) => {
-  if (state.settingsOpen || state.typing || Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+  if (!state.prefs.swipeToSwitch || state.settingsOpen || state.typing || Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
   e.preventDefault();
   clearTimeout(swipeResetTimer);
   swipeResetTimer = setTimeout(() => { swipeAccum = 0; }, 180);

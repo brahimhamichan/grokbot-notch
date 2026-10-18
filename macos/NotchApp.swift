@@ -421,7 +421,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private weak var audioOwner: NotchSurface?
 
     private let panelWidth: CGFloat = 400
-    private let panelHeight: CGFloat = 320
+    private let panelHeight: CGFloat = 360
     private var currentBotName = "Chief"
     private var currentCallPhase = "idle"
     private var rosterBots: [[String: String]] = []
@@ -447,7 +447,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         [
             "showOnAllScreens": defaults.object(forKey: "showOnAllScreens") as? Bool ?? true,
             "hoverToOpen": defaults.object(forKey: "hoverToOpen") as? Bool ?? true,
-            "sounds": defaults.object(forKey: "sounds") as? Bool ?? true
+            "sounds": defaults.object(forKey: "sounds") as? Bool ?? true,
+            "swipeToSwitch": defaults.object(forKey: "swipeToSwitch") as? Bool ?? false
         ]
     }
 

@@ -466,7 +466,7 @@ body.browser-preview {
 .settings-view { display: none; }
 .notch-pouch[data-expanded="true"][data-settings="true"] {
   width: 300px;
-  height: 300px;
+  height: 328px;
 }
 .notch-pouch[data-expanded="true"][data-settings="true"] .expanded-content { display: none; }
 .notch-pouch[data-expanded="true"][data-settings="true"] .settings-view {
