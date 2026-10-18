@@ -18,6 +18,36 @@
           <path d="M0 0H18C8.059 0 0 8.059 0 18V0Z" />
         </svg>
 
+        <!-- SETTINGS SCREEN (replaces the expanded content while open) -->
+        <div id="settings-view" class="settings-view">
+          <div class="settings-header">
+            <button id="settings-close-btn" class="corner-btn" type="button" aria-label="Back" title="Back">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.25 3.5 5.75 8l4.5 4.5" /></svg>
+            </button>
+            <span class="settings-title">Settings</span>
+            <span class="settings-header-spacer"></span>
+          </div>
+          <div class="settings-group">
+            <label class="settings-row">
+              <span>Voice <small id="settings-bot-name"></small></span>
+              <select id="settings-voice" class="settings-select"></select>
+            </label>
+            <div class="settings-row">
+              <span>Speed</span>
+              <div id="settings-speed" class="segmented">
+                <button type="button" data-speed="0.85">Slow</button>
+                <button type="button" data-speed="1">Normal</button>
+                <button type="button" data-speed="1.2">Fast</button>
+              </div>
+            </div>
+          </div>
+          <div class="settings-group">
+            <label class="settings-row"><span>Open on hover</span><input type="checkbox" class="switch" data-pref="hoverToOpen" /></label>
+            <label class="settings-row"><span>Sounds</span><input type="checkbox" class="switch" data-pref="sounds" /></label>
+            <label class="settings-row"><span>Show on all screens</span><input type="checkbox" class="switch" data-pref="showOnAllScreens" /></label>
+          </div>
+        </div>
+
         <!-- COLLAPSED BAR (visible when data-expanded="false") -->
         <button id="collapsed-bar" class="collapsed-bar" type="button" title="Expand GrokBot Notch (⌥Space)">
           <span id="collapsed-mark" class="collapsed-mark"></span>
@@ -43,6 +73,9 @@
               </svg>
             </span>
           </button>
+
+          <!-- Settings gear (top-left) opens the in-notch settings screen -->
+          <button id="settings-btn" class="corner-btn settings-btn" type="button" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
 
           <!-- Mute toggle (only shown during a call) -->
           <button id="mute-btn" class="mute-btn" type="button" aria-label="Mute microphone" title="Mute microphone (⌘⇧M)" aria-pressed="false">

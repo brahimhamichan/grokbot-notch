@@ -35,6 +35,7 @@ for (const [name, file] of Object.entries(SOUND_FILES)) {
   fetch(`/sounds/${file}.wav`).then((r) => r.blob()).then((b) => { audio.src = URL.createObjectURL(b); }).catch(() => {});
 }
 function playUiSound(name) {
+  if (!state.prefs.sounds) return;
   try {
     const snd = SOUNDS[name];
     if (!snd) return;
@@ -45,6 +46,7 @@ function playUiSound(name) {
 
 // Authentic Grok Bot Voice Call Connect (E5->B5) & Hangup (B5->E5) Chimes
 function playCallChime(kind = "connect") {
+  if (!state.prefs.sounds) return;
   try {
     const sampleRate = 24000;
     const notes =
@@ -86,6 +88,9 @@ const state = {
   sendingText: false,
   activeAccountScope: null,
   bots: [],
+  voices: [],
+  prefs: { sounds: true, hoverToOpen: true, showOnAllScreens: true },
+  settingsOpen: false,
   selectedBotId: null,
   statusCaption: "",
   call: {
@@ -114,7 +119,13 @@ const dom = {
   collapsedWaves: document.querySelector(".collapsed-waves"),
   typeForm: document.getElementById("type-form"),
   typeInput: document.getElementById("type-input"),
-  muteBtn: document.getElementById("mute-btn")
+  muteBtn: document.getElementById("mute-btn"),
+  settingsBtn: document.getElementById("settings-btn"),
+  settingsCloseBtn: document.getElementById("settings-close-btn"),
+  settingsBotName: document.getElementById("settings-bot-name"),
+  settingsVoice: document.getElementById("settings-voice"),
+  settingsSpeed: document.getElementById("settings-speed"),
+  prefSwitches: document.querySelectorAll("[data-pref]")
 };
 
 function getSelectedBot() {
@@ -312,13 +323,14 @@ function reportHitRectToNative() {
 const resizeObserver = new ResizeObserver(() => reportHitRectToNative());
 resizeObserver.observe(dom.pouch);
 
-function setExpanded(expanded) {
+function setExpanded(expanded, { silent = false } = {}) {
   const next = Boolean(expanded);
   if (state.expanded === next) return;
   state.expanded = next;
   dom.pouch.dataset.expanded = String(next);
+  if (!next) setSettingsOpen(false);
   if (next) {
-    playUiSound("open");
+    if (!silent) playUiSound("open");
     refreshBootstrap();
   } else {
     setTypingMode(false);
@@ -943,6 +955,7 @@ function renderPouch() {
   syncCharacterToBot(bot);
 
   dom.pouch.dataset.call = state.call.phase;
+  if (state.settingsOpen) renderSettings();
   dom.pouch.dataset.muted = String(state.call.phase !== "idle" && state.call.isMuted);
   dom.muteBtn.setAttribute("aria-pressed", String(state.call.isMuted));
   dom.muteBtn.title = state.call.isMuted ? "Unmute microphone (⌘⇧M)" : "Mute microphone (⌘⇧M)";
@@ -993,6 +1006,67 @@ function cycleBot(delta) {
 // ============================================================================
 // EVENTS & SHORTCUTS
 // ============================================================================
+// ============================================================================
+// SETTINGS SCREEN
+// ============================================================================
+function setSettingsOpen(open) {
+  state.settingsOpen = Boolean(open);
+  dom.pouch.dataset.settings = String(state.settingsOpen);
+  if (state.settingsOpen) {
+    setTypingMode(false);
+    renderSettings();
+  }
+  reportHitRectToNative();
+  let steps = 0;
+  const timer = setInterval(() => {
+    reportHitRectToNative();
+    if (++steps > 10) clearInterval(timer);
+  }, 35);
+}
+
+function renderSettings() {
+  for (const el of dom.prefSwitches) el.checked = Boolean(state.prefs[el.dataset.pref]);
+  const bot = getSelectedBot();
+  if (!bot) return;
+  dom.settingsBotName.textContent = `· ${bot.name}`;
+  const current = bot.voiceId || state.voices[0]?.id || "";
+  dom.settingsVoice.replaceChildren(...state.voices.map((v) => Object.assign(new Option(v.label, v.id, false, v.id === current), { title: v.tag })));
+  const speed = Number(bot.voiceSpeed || 1);
+  for (const b of dom.settingsSpeed.querySelectorAll("button")) {
+    b.setAttribute("aria-pressed", String(Math.abs(Number(b.dataset.speed) - speed) < 0.05));
+  }
+}
+
+async function saveVoiceSettings(patch) {
+  const bot = getSelectedBot();
+  if (!bot) return;
+  Object.assign(bot, patch);
+  renderSettings();
+  await fetch("/api/voice/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agentId: bot.id, ...patch })
+  }).catch(() => {});
+}
+
+dom.settingsBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  playUiSound("tick");
+  setSettingsOpen(true);
+});
+dom.settingsCloseBtn.addEventListener("click", () => setSettingsOpen(false));
+dom.settingsVoice.addEventListener("change", () => saveVoiceSettings({ voiceId: dom.settingsVoice.value }));
+dom.settingsSpeed.addEventListener("click", (e) => {
+  const speed = e.target.closest("button")?.dataset.speed;
+  if (speed) saveVoiceSettings({ voiceSpeed: Number(speed) });
+});
+for (const el of dom.prefSwitches) {
+  el.addEventListener("change", () => {
+    state.prefs[el.dataset.pref] = el.checked;
+    postNativeMessage({ type: "setPref", key: el.dataset.pref, value: el.checked });
+  });
+}
+
 dom.muteBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   toggleMute();
@@ -1127,6 +1201,10 @@ dom.typeForm.addEventListener("submit", async (e) => {
 
 window.addEventListener("keydown", (e) => {
   if (!state.expanded) return;
+  if (state.settingsOpen) {
+    if (e.key === "Escape") setSettingsOpen(false);
+    return;
+  }
 
   if (e.key === "Escape") {
     if (state.typing) {
@@ -1177,7 +1255,12 @@ window.__notchCommand = async (cmd) => {
       }
       break;
     case "expand":
-      setExpanded(true);
+      setExpanded(true, { silent: Boolean(cmd.silent) });
+      if (cmd.focusInput && state.call.phase === "idle") setTypingMode(true);
+      break;
+    case "setPrefs":
+      state.prefs = { ...state.prefs, ...cmd.prefs };
+      renderSettings();
       break;
     case "collapse":
       setExpanded(false);
@@ -1192,7 +1275,9 @@ window.__notchCommand = async (cmd) => {
       cycleBot(-1);
       break;
     case "escape":
-      if (state.typing) {
+      if (state.settingsOpen) {
+        setSettingsOpen(false);
+      } else if (state.typing) {
         dom.typeInput.value = "";
         setTypingMode(false);
       } else if (state.call.phase !== "idle") {
@@ -1239,6 +1324,7 @@ async function refreshBootstrap() {
 
     state.activeAccountScope = data.activeAccountScope || state.activeAccountScope;
     state.bots = data.bots;
+    state.voices = data.voices || state.voices;
 
     if (accountChanged || !state.selectedBotId || !state.bots.some((b) => b.id === state.selectedBotId)) {
       state.selectedBotId = data.selectedBotId || state.bots[0]?.id || null;

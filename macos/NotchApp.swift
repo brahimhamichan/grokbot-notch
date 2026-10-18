@@ -381,18 +381,45 @@ final class NativeVoiceAudioController {
 }
 
 // MARK: - Main Application Delegate
+// MARK: - One Notch Surface per Screen (panel + web view + its own hover/hit state)
+final class NotchSurface {
+    let screenID: CGDirectDisplayID
+    let panel: NotchPanel
+    let webView: NotchWebView
+    var hitRect = NSRect(x: 94, y: 0, width: 212, height: 56)
+    var isOpen = false
+    var isTyping = false
+    var callPhase = "idle"
+    var openedByHover = false
+    var cursorVisitedOpenPouch = false
+    var hoverWork: DispatchWorkItem?
+
+    init(screenID: CGDirectDisplayID, panel: NotchPanel, webView: NotchWebView) {
+        self.screenID = screenID
+        self.panel = panel
+        self.webView = webView
+    }
+
+    func send(_ dict: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: dict),
+              let json = String(data: data, encoding: .utf8) else { return }
+        webView.evaluateJavaScript("window.__notchCommand && window.__notchCommand(\(json))", completionHandler: nil)
+    }
+
+    func localPoint(_ screenPoint: NSPoint) -> NSPoint {
+        NSPoint(x: screenPoint.x - panel.frame.minX, y: panel.frame.maxY - screenPoint.y)
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate {
-    private var panel: NotchPanel!
-    private var webView: NotchWebView!
+    private var surfaces: [NotchSurface] = []
     private var statusItem: NSStatusItem!
     private let bridge = NodeBridge()
     private let audioController = NativeVoiceAudioController()
+    private weak var audioOwner: NotchSurface?
 
     private let panelWidth: CGFloat = 400
     private let panelHeight: CGFloat = 320
-    private var hitRectInPanel = NSRect(x: 94, y: 0, width: 212, height: 56)
-    private var isNotchOpen = false
-    private var isTypingInNotch = false
     private var currentBotName = "Chief"
     private var currentCallPhase = "idle"
     private var rosterBots: [[String: String]] = []
@@ -407,11 +434,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private var rightArrowHotKeyRef: EventHotKeyRef?
     private var escapeHotKeyRef: EventHotKeyRef?
     private var muteHotKeyRef: EventHotKeyRef?
-    private var hoverWork: DispatchWorkItem?
-    private var openedByHover = false
-    private var cursorVisitedOpenPouch = false
+    private var navHotKeysState: (active: Bool, arrows: Bool) = (false, false)
     private let hoverOpenDelay = 0.15
     private let hoverCloseDelay = 0.8
+
+    // App preferences (edited from the in-notch settings screen), persisted in UserDefaults.
+    private let defaults = UserDefaults.standard
+    private var prefs: [String: Bool] {
+        [
+            "showOnAllScreens": defaults.object(forKey: "showOnAllScreens") as? Bool ?? true,
+            "hoverToOpen": defaults.object(forKey: "hoverToOpen") as? Bool ?? true,
+            "sounds": defaults.object(forKey: "sounds") as? Bool ?? true
+        ]
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         sharedAppDelegate = self
@@ -421,12 +456,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
         bridge.start()
         setupStatusItem()
-        setupNotchPanel()
+        reconcileSurfaces()
         setupEventMonitors()
 
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(repositionNotchPanel),
+            selector: #selector(reconcileSurfaces),
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
@@ -436,98 +471,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         audioController.stop()
         if let hk1 = toggleHotKeyRef { UnregisterEventHotKey(hk1) }
         if let hk2 = voiceHotKeyRef { UnregisterEventHotKey(hk2) }
-        updateExpandedNavigationHotKeys(active: false, includeArrows: false)
+        setNavigationHotKeys(active: false, includeArrows: false)
         bridge.stop()
     }
 
-    private func updateExpandedNavigationHotKeys(active: Bool, includeArrows: Bool) {
-        if let hk = leftArrowHotKeyRef {
-            UnregisterEventHotKey(hk)
-            leftArrowHotKeyRef = nil
-        }
-        if let hk = rightArrowHotKeyRef {
-            UnregisterEventHotKey(hk)
-            rightArrowHotKeyRef = nil
-        }
-        if let hk = escapeHotKeyRef {
-            UnregisterEventHotKey(hk)
-            escapeHotKeyRef = nil
-        }
-
+    private func setNavigationHotKeys(active: Bool, includeArrows: Bool) {
+        guard navHotKeysState != (active, includeArrows) else { return }
+        navHotKeysState = (active, includeArrows)
+        for ref in [leftArrowHotKeyRef, rightArrowHotKeyRef, escapeHotKeyRef] { if let ref { UnregisterEventHotKey(ref) } }
+        leftArrowHotKeyRef = nil
+        rightArrowHotKeyRef = nil
+        escapeHotKeyRef = nil
         guard active else { return }
-
-        let escID = EventHotKeyID(signature: OSType(0x47424E35), id: 5)
-        RegisterEventHotKey(
-            UInt32(kVK_Escape),
-            0,
-            escID,
-            GetApplicationEventTarget(),
-            0,
-            &escapeHotKeyRef
-        )
-
+        RegisterEventHotKey(UInt32(kVK_Escape), 0, EventHotKeyID(signature: OSType(0x47424E35), id: 5), GetApplicationEventTarget(), 0, &escapeHotKeyRef)
         if includeArrows {
-            let leftID = EventHotKeyID(signature: OSType(0x47424E33), id: 3)
-            RegisterEventHotKey(
-                UInt32(kVK_LeftArrow),
-                0,
-                leftID,
-                GetApplicationEventTarget(),
-                0,
-                &leftArrowHotKeyRef
-            )
-
-            let rightID = EventHotKeyID(signature: OSType(0x47424E34), id: 4)
-            RegisterEventHotKey(
-                UInt32(kVK_RightArrow),
-                0,
-                rightID,
-                GetApplicationEventTarget(),
-                0,
-                &rightArrowHotKeyRef
-            )
+            RegisterEventHotKey(UInt32(kVK_LeftArrow), 0, EventHotKeyID(signature: OSType(0x47424E33), id: 3), GetApplicationEventTarget(), 0, &leftArrowHotKeyRef)
+            RegisterEventHotKey(UInt32(kVK_RightArrow), 0, EventHotKeyID(signature: OSType(0x47424E34), id: 4), GetApplicationEventTarget(), 0, &rightArrowHotKeyRef)
         }
     }
 
     // MARK: - Carbon Global HotKeys (Works Across All Apps Without Accessibility Prompts)
     private func registerCarbonGlobalHotKeys() {
-        var eventType = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
-        InstallEventHandler(
-            GetApplicationEventTarget(),
-            carbonHotKeyHandler,
-            1,
-            &eventType,
-            nil,
-            nil
-        )
-
-        // HotKey 1: Option + Space (keyCode 49) -> Toggle Notch Expand/Collapse
-        let hkID1 = EventHotKeyID(signature: OSType(0x47424E31), id: 1)
-        RegisterEventHotKey(
-            UInt32(kVK_Space),
-            UInt32(optionKey),
-            hkID1,
-            GetApplicationEventTarget(),
-            0,
-            &toggleHotKeyRef
-        )
-
-        // HotKey 2: Cmd + Shift + G (keyCode 5) -> Toggle Voice Mode
-        let hkID2 = EventHotKeyID(signature: OSType(0x47424E32), id: 2)
-        RegisterEventHotKey(
-            UInt32(kVK_ANSI_G),
-            UInt32(cmdKey | shiftKey),
-            hkID2,
-            GetApplicationEventTarget(),
-            0,
-            &voiceHotKeyRef
-        )
+        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetApplicationEventTarget(), carbonHotKeyHandler, 1, &eventType, nil, nil)
+        // ⌥Space toggles the notch; ⌘⇧G starts/ends a voice call.
+        RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), EventHotKeyID(signature: OSType(0x47424E31), id: 1), GetApplicationEventTarget(), 0, &toggleHotKeyRef)
+        RegisterEventHotKey(UInt32(kVK_ANSI_G), UInt32(cmdKey | shiftKey), EventHotKeyID(signature: OSType(0x47424E32), id: 2), GetApplicationEventTarget(), 0, &voiceHotKeyRef)
     }
 
-    // MARK: - Main Screen & Hardware Notch Detection
+    // MARK: - Screens & Hardware Notch Detection
     private func primaryMacScreen() -> NSScreen? {
         if #available(macOS 12.0, *) {
             if let notched = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) {
@@ -535,6 +507,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             }
         }
         return NSScreen.screens.first ?? NSScreen.main
+    }
+
+    private func displayID(_ screen: NSScreen) -> CGDirectDisplayID {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+    }
+
+    private func screen(for surface: NotchSurface) -> NSScreen? {
+        NSScreen.screens.first { displayID($0) == surface.screenID }
     }
 
     private func detectHardwareNotchGeometry(for screen: NSScreen) -> (width: CGFloat, height: CGFloat) {
@@ -547,24 +527,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 }
             }
         }
-        return (185, 32)
+        // Screens without a notch get a notch-shaped pouch sized to their menu bar.
+        return (185, max(24, screen.frame.maxY - screen.visibleFrame.maxY))
     }
 
-    private func setupNotchPanel() {
-        guard let screen = primaryMacScreen() else { return }
-        let frame = NSRect(
-            x: screen.frame.midX - panelWidth / 2,
-            y: screen.frame.maxY - panelHeight,
-            width: panelWidth,
-            height: panelHeight
-        )
+    private func panelFrame(on screen: NSScreen) -> NSRect {
+        NSRect(x: screen.frame.midX - panelWidth / 2, y: screen.frame.maxY - panelHeight, width: panelWidth, height: panelHeight)
+    }
 
-        panel = NotchPanel(
-            contentRect: frame,
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
+    // Keeps exactly one surface per target screen (all screens, or just the main one per settings).
+    @objc private func reconcileSurfaces() {
+        let targets = prefs["showOnAllScreens"]! ? NSScreen.screens : [primaryMacScreen()].compactMap { $0 }
+        let targetIDs = Set(targets.map(displayID))
+        for surface in surfaces where !targetIDs.contains(surface.screenID) {
+            if surface === audioOwner { audioController.stop() }
+            surface.panel.orderOut(nil)
+            surface.webView.configuration.userContentController.removeScriptMessageHandler(forName: "notchHost")
+        }
+        surfaces.removeAll { !targetIDs.contains($0.screenID) }
+        for screen in targets {
+            if let existing = surfaces.first(where: { $0.screenID == displayID(screen) }) {
+                existing.panel.setFrame(panelFrame(on: screen), display: true)
+                sendGeometry(to: existing)
+            } else {
+                surfaces.append(makeSurface(on: screen))
+            }
+        }
+    }
+
+    private func makeSurface(on screen: NSScreen) -> NotchSurface {
+        let panel = NotchPanel(contentRect: panelFrame(on: screen), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.statusWindow)) + 2)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.isOpaque = false
@@ -573,6 +565,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         panel.hidesOnDeactivate = false
         panel.isMovable = false
         panel.acceptsMouseMovedEvents = true
+        panel.ignoresMouseEvents = true
 
         let config = WKWebViewConfiguration()
         config.userContentController.add(self, name: "notchHost")
@@ -580,119 +573,111 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         config.setURLSchemeHandler(NotchSchemeHandler(bridge: bridge), forURLScheme: NotchSchemeHandler.scheme)
         config.websiteDataStore = .nonPersistent()
 
-        webView = NotchWebView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight), configuration: config)
+        let webView = NotchWebView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight), configuration: config)
         webView.uiDelegate = self
         webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
         webView.allowsMagnification = false
 
-        audioController.webView = webView
         panel.contentView = webView
         panel.orderFrontRegardless()
-
         if let url = URL(string: "\(NotchSchemeHandler.scheme)://app/?native=1") {
             webView.load(URLRequest(url: url))
         }
-
-        let notchGeo = detectHardwareNotchGeometry(for: screen)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
-            self?.sendCommandToWeb([
-                "action": "setNotchGeometry",
-                "notchWidth": Int(notchGeo.width),
-                "notchHeight": Int(notchGeo.height)
-            ])
-        }
+        return NotchSurface(screenID: displayID(screen), panel: panel, webView: webView)
     }
 
-    @objc private func repositionNotchPanel() {
-        guard let screen = primaryMacScreen(), let panel = panel else { return }
-        let frame = NSRect(
-            x: screen.frame.midX - panelWidth / 2,
-            y: screen.frame.maxY - panelHeight,
-            width: panelWidth,
-            height: panelHeight
-        )
-        panel.setFrame(frame, display: true)
+    private func sendGeometry(to surface: NotchSurface) {
+        guard let screen = screen(for: surface) else { return }
+        let geo = detectHardwareNotchGeometry(for: screen)
+        surface.send(["action": "setNotchGeometry", "notchWidth": Int(geo.width), "notchHeight": Int(geo.height)])
     }
 
-    // MARK: - Surgical Hit-Testing & Cursor Gaze Monitors
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let surface = surfaces.first(where: { $0.webView === webView }) else { return }
+        sendGeometry(to: surface)
+        surface.send(["action": "setPrefs", "prefs": prefs])
+    }
+
+    // Surface on the screen under the cursor (where hotkeys act), falling back to the main one.
+    private var activeSurface: NotchSurface? {
+        let mouse = NSEvent.mouseLocation
+        return surfaces.first { screen(for: $0)?.frame.contains(mouse) == true } ?? surfaces.first
+    }
+
+    private var callSurface: NotchSurface? { surfaces.first { $0.callPhase != "idle" } }
+    private var openSurface: NotchSurface? { activeSurface.flatMap { $0.isOpen ? $0 : nil } ?? surfaces.first { $0.isOpen } }
+
+    private func focus(_ surface: NotchSurface) {
+        surface.panel.ignoresMouseEvents = false
+        NSApp.activate(ignoringOtherApps: true)
+        surface.panel.makeKeyAndOrderFront(nil)
+        surface.panel.makeFirstResponder(surface.webView)
+    }
+
+    // MARK: - Hit-Testing, Hover & Cursor Gaze Monitors
     private func setupEventMonitors() {
-        let handleMouseMove: () -> Void = { [weak self] in
-            self?.updateMousePassthroughAndGaze()
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in
+            self?.handleMouseMove()
         }
 
-        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged], handler: { _ in
-            handleMouseMove()
-        })
-
-        // Clicking outside the expanded notch collapses it (an active call keeps running in the collapsed bar).
-        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
-            guard let self = self, self.isNotchOpen, let panel = self.panel else { return }
-            let mouseScreen = NSEvent.mouseLocation
-            let localX = mouseScreen.x - panel.frame.minX
-            let localTopY = panel.frame.maxY - mouseScreen.y
-            if !self.hitRectInPanel.insetBy(dx: -10, dy: -10).contains(NSPoint(x: localX, y: localTopY)) {
-                self.sendCommandToWeb(["action": "collapse"])
+        // Clicking outside an expanded notch collapses it (an active call keeps running in the collapsed bar).
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            guard let self = self else { return }
+            let mouse = NSEvent.mouseLocation
+            for surface in self.surfaces where surface.isOpen && !surface.hitRect.insetBy(dx: -10, dy: -10).contains(surface.localPoint(mouse)) {
+                surface.send(["action": "collapse"])
             }
-        })
+        }
 
-        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown], handler: { event in
-            handleMouseMove()
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown]) { [weak self] event in
+            self?.handleMouseMove()
             return event
-        })
+        }
+    }
+
+    private func handleMouseMove() {
+        let mouse = NSEvent.mouseLocation
+        for surface in surfaces {
+            let local = surface.localPoint(mouse)
+            let isInside = surface.hitRect.insetBy(dx: -10, dy: -6).contains(local)
+            if surface.panel.ignoresMouseEvents == isInside {
+                surface.panel.ignoresMouseEvents = !isInside
+            }
+            scheduleHover(surface, isInside: isInside, local: local)
+            if surface.isOpen && local.y >= -20 && local.y <= panelHeight + 80 && local.x >= -120 && local.x <= panelWidth + 120 {
+                surface.webView.evaluateJavaScript("window.__onNativeCursorMove && window.__onNativeCursorMove(\(Int(local.x)), \(Int(local.y)))", completionHandler: nil)
+            }
+        }
     }
 
     // Hover opens the notch after a short dwell; leaving closes it after a grace period (not while typing).
-    private func scheduleHover(isInside: Bool, localX: CGFloat, localTopY: CGFloat) {
-        let nearOpenPouch = hitRectInPanel.insetBy(dx: -24, dy: -24).contains(NSPoint(x: localX, y: localTopY))
+    private func scheduleHover(_ s: NotchSurface, isInside: Bool, local: NSPoint) {
+        let nearOpenPouch = s.hitRect.insetBy(dx: -24, dy: -24).contains(local)
         // Only auto-close once the cursor has been over the open pouch (so ⌥Space with the mouse elsewhere stays open).
-        if isNotchOpen && nearOpenPouch { cursorVisitedOpenPouch = true }
-        if !isNotchOpen && isInside {
-            guard hoverWork == nil else { return }
-            let work = DispatchWorkItem { [weak self] in
-                guard let self = self, !self.isNotchOpen else { return }
-                self.hoverWork = nil
-                self.openedByHover = true
-                self.sendCommandToWeb(["action": "expand"])
+        if s.isOpen && nearOpenPouch { s.cursorVisitedOpenPouch = true }
+        if !s.isOpen && isInside && prefs["hoverToOpen"]! {
+            guard s.hoverWork == nil else { return }
+            let work = DispatchWorkItem { [weak s] in
+                guard let s = s, !s.isOpen else { return }
+                s.hoverWork = nil
+                s.openedByHover = true
+                s.send(["action": "expand", "silent": true])
             }
-            hoverWork = work
+            s.hoverWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + hoverOpenDelay, execute: work)
-        } else if isNotchOpen && !nearOpenPouch && !isTypingInNotch && (openedByHover || cursorVisitedOpenPouch) {
-            guard hoverWork == nil else { return }
-            let work = DispatchWorkItem { [weak self] in
-                guard let self = self, self.isNotchOpen, !self.isTypingInNotch else { return }
-                self.hoverWork = nil
-                self.sendCommandToWeb(["action": "collapse"])
+        } else if s.isOpen && !nearOpenPouch && !s.isTyping && (s.openedByHover || s.cursorVisitedOpenPouch) {
+            guard s.hoverWork == nil else { return }
+            let work = DispatchWorkItem { [weak s] in
+                guard let s = s, s.isOpen, !s.isTyping else { return }
+                s.hoverWork = nil
+                s.send(["action": "collapse"])
             }
-            hoverWork = work
+            s.hoverWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + hoverCloseDelay, execute: work)
         } else {
-            hoverWork?.cancel()
-            hoverWork = nil
-        }
-    }
-
-    private func updateMousePassthroughAndGaze() {
-        guard let panel = panel else { return }
-        let mouseScreen = NSEvent.mouseLocation
-        let panelFrame = panel.frame
-
-        let localX = mouseScreen.x - panelFrame.minX
-        let localTopY = panelFrame.maxY - mouseScreen.y
-
-        let paddedHitRect = hitRectInPanel.insetBy(dx: -10, dy: -6)
-        let isInside = paddedHitRect.contains(NSPoint(x: localX, y: localTopY))
-
-        if panel.ignoresMouseEvents == isInside {
-            panel.ignoresMouseEvents = !isInside
-        }
-        scheduleHover(isInside: isInside, localX: localX, localTopY: localTopY)
-
-        if isNotchOpen && localTopY >= -20 && localTopY <= panelHeight + 80 && localX >= -120 && localX <= panelWidth + 120 {
-            webView?.evaluateJavaScript(
-                "window.__onNativeCursorMove && window.__onNativeCursorMove(\(Int(localX)), \(Int(localTopY)))",
-                completionHandler: nil
-            )
+            s.hoverWork?.cancel()
+            s.hoverWork = nil
         }
     }
 
@@ -714,23 +699,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
     private func rebuildStatusMenu() {
         let menu = NSMenu()
-
-        let toggleItem = NSMenuItem(title: "Toggle GrokBot Notch (⌥Space)", action: #selector(toggleNotchExpand), keyEquivalent: "")
-        menu.addItem(toggleItem)
-
-        let callTitle = (currentCallPhase == "idle")
-            ? "Start Voice Call with \(currentBotName) (⌘⇧G)"
-            : "End Voice Call (\(currentBotName))"
-        let callItem = NSMenuItem(title: callTitle, action: #selector(toggleVoiceCall), keyEquivalent: "")
-        menu.addItem(callItem)
-
+        menu.addItem(NSMenuItem(title: "Toggle GrokBot Notch (⌥Space)", action: #selector(toggleNotchExpand), keyEquivalent: ""))
+        let callTitle = (currentCallPhase == "idle") ? "Start Voice Call with \(currentBotName) (⌘⇧G)" : "End Voice Call (\(currentBotName))"
+        menu.addItem(NSMenuItem(title: callTitle, action: #selector(toggleVoiceCall), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
 
         if !rosterBots.isEmpty {
             let header = NSMenuItem(title: "Bots", action: nil, keyEquivalent: "")
             header.isEnabled = false
             menu.addItem(header)
-
             for bot in rosterBots {
                 guard let id = bot["id"], let name = bot["name"] else { continue }
                 let item = NSMenuItem(title: name, action: #selector(selectBotFromMenu(_:)), keyEquivalent: "")
@@ -741,35 +718,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             menu.addItem(NSMenuItem.separator())
         }
 
-        let openDesktop = NSMenuItem(title: "Open Desktop Grok Bot.app", action: #selector(openDesktopApp), keyEquivalent: "o")
-        menu.addItem(openDesktop)
-
+        menu.addItem(NSMenuItem(title: "Open Desktop Grok Bot.app", action: #selector(openDesktopApp), keyEquivalent: "o"))
         menu.addItem(NSMenuItem.separator())
-
-        let quitItem = NSMenuItem(title: "Quit GrokBot Notch", action: #selector(quitApp), keyEquivalent: "q")
-        menu.addItem(quitItem)
-
+        menu.addItem(NSMenuItem(title: "Quit GrokBot Notch", action: #selector(quitApp), keyEquivalent: "q"))
         statusItem.menu = menu
     }
 
+    // ⌥Space: opens on the screen under the cursor, straight into the text input.
     @objc func toggleNotchExpand() {
-        repositionNotchPanel()
-        panel.ignoresMouseEvents = false
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
-        sendCommandToWeb(["action": "toggleExpand"])
+        guard let s = activeSurface else { return }
+        if s.isOpen {
+            s.send(["action": "collapse"])
+        } else {
+            reconcileSurfaces()
+            focus(s)
+            s.send(["action": "expand", "focusInput": true])
+        }
     }
 
     @objc func toggleVoiceCall() {
-        repositionNotchPanel()
-        panel.ignoresMouseEvents = false
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
-        sendCommandToWeb(["action": "toggleVoiceCall"])
+        guard let s = callSurface ?? activeSurface else { return }
+        reconcileSurfaces()
+        focus(s)
+        s.send(["action": "toggleVoiceCall"])
     }
 
     func toggleMute() {
-        sendCommandToWeb(["action": "toggleMute"])
+        callSurface?.send(["action": "toggleMute"])
     }
 
     // ⌘⇧M is only claimed while a call is in progress, so other apps keep it otherwise.
@@ -783,24 +758,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
 
     func cyclePrevBot() {
-        sendCommandToWeb(["action": "prevBot"])
+        openSurface?.send(["action": "prevBot"])
     }
 
     func cycleNextBot() {
-        sendCommandToWeb(["action": "nextBot"])
+        openSurface?.send(["action": "nextBot"])
     }
 
     func handleEscapeKey() {
-        sendCommandToWeb(["action": "escape"])
+        openSurface?.send(["action": "escape"])
     }
 
     @objc private func selectBotFromMenu(_ sender: NSMenuItem) {
-        guard let botId = sender.representedObject as? String else { return }
+        guard let botId = sender.representedObject as? String, let s = activeSurface else { return }
         selectedBotId = botId
-        panel.ignoresMouseEvents = false
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
-        sendCommandToWeb(["action": "selectBot", "botId": botId])
+        focus(s)
+        s.send(["action": "selectBot", "botId": botId])
     }
 
     @objc private func openDesktopApp() {
@@ -811,16 +784,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         NSApp.terminate(nil)
     }
 
-    private func sendCommandToWeb(_ dict: [String: Any]) {
-        guard let data = try? JSONSerialization.data(withJSONObject: dict),
-              let json = String(data: data, encoding: .utf8) else { return }
-        webView?.evaluateJavaScript("window.__notchCommand && window.__notchCommand(\(json))", completionHandler: nil)
+    private func refreshGlobalHotKeys() {
+        let open = openSurface
+        setNavigationHotKeys(active: open != nil, includeArrows: open.map { !$0.isTyping } ?? false)
+        updateMuteHotKey(active: callSurface != nil)
     }
 
     // MARK: - WKScriptMessageHandler & WKUIDelegate
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any],
-              let type = body["type"] as? String else { return }
+              let type = body["type"] as? String,
+              let surface = surfaces.first(where: { $0.webView === message.webView }) else { return }
 
         switch type {
         case "hitRect":
@@ -828,32 +802,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             let y = CGFloat((body["y"] as? NSNumber)?.doubleValue ?? 0)
             let w = CGFloat((body["width"] as? NSNumber)?.doubleValue ?? 212)
             let h = CGFloat((body["height"] as? NSNumber)?.doubleValue ?? 56)
-            hitRectInPanel = NSRect(x: x, y: y, width: w, height: h)
-            let wasOpen = isNotchOpen
-            isNotchOpen = (body["isOpen"] as? Bool) ?? false
-            isTypingInNotch = (body["isTyping"] as? Bool) ?? false
+            surface.hitRect = NSRect(x: x, y: y, width: w, height: h)
+            let wasOpen = surface.isOpen
+            surface.isOpen = (body["isOpen"] as? Bool) ?? false
+            surface.isTyping = (body["isTyping"] as? Bool) ?? false
+            surface.callPhase = (body["callPhase"] as? String) ?? "idle"
 
-            updateExpandedNavigationHotKeys(active: isNotchOpen, includeArrows: isNotchOpen && !isTypingInNotch)
-
-            if isNotchOpen && !wasOpen {
-                panel.ignoresMouseEvents = false
+            if surface.isOpen && !wasOpen {
+                surface.panel.ignoresMouseEvents = false
                 // Hover-open must not steal focus from the current app; hotkey/click opens take focus for typing.
-                if !openedByHover {
-                    NSApp.activate(ignoringOtherApps: true)
-                    panel.makeKeyAndOrderFront(nil)
-                    panel.makeFirstResponder(webView)
-                }
+                if !surface.openedByHover { focus(surface) }
             }
-            if !isNotchOpen { openedByHover = false }
-            if isNotchOpen != wasOpen { hoverWork?.cancel(); hoverWork = nil; cursorVisitedOpenPouch = false }
+            if !surface.isOpen { surface.openedByHover = false }
+            if surface.isOpen != wasOpen {
+                surface.hoverWork?.cancel()
+                surface.hoverWork = nil
+                surface.cursorVisitedOpenPouch = false
+            }
 
             if let botName = body["botName"] as? String, !botName.isEmpty {
                 currentBotName = botName
             }
-            if let phase = body["callPhase"] as? String {
-                currentCallPhase = phase
-            }
-            updateMuteHotKey(active: currentCallPhase != "idle")
+            currentCallPhase = callSurface?.callPhase ?? "idle"
+            refreshGlobalHotKeys()
             updateStatusItemAppearance()
             rebuildStatusMenu()
 
@@ -866,7 +837,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             }
             rebuildStatusMenu()
 
+        case "setPref":
+            guard let key = body["key"] as? String, prefs[key] != nil, let value = body["value"] as? Bool else { return }
+            defaults.set(value, forKey: key)
+            for s in surfaces { s.send(["action": "setPrefs", "prefs": prefs]) }
+            if key == "showOnAllScreens" { reconcileSurfaces() }
+
         case "audioStart":
+            audioOwner = surface
+            audioController.webView = surface.webView
             audioController.start()
 
         case "audioPlay":
@@ -878,11 +857,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             audioController.stopPlayback()
 
         case "audioSetMuted":
-            let muted = (body["muted"] as? Bool) ?? false
-            audioController.setMuted(muted)
+            audioController.setMuted((body["muted"] as? Bool) ?? false)
 
         case "audioStop":
-            audioController.stop()
+            if surface === audioOwner { audioController.stop() }
 
         default:
             break
