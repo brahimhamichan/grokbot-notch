@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "Name": "GrokBot Notch",
+  "Version": "1.0.0.0",
+  "Author": "Brahim Hamichan",
+  "Description": "Call your Grok Bots from Stream Deck: press to start or end a call, hold to mute. Keys show the agent and a live waveform.",
+  "URL": "https://github.com/brahimhamichan/grokbot-notch",
+  "Icon": "imgs/plugin",
+  "Category": "GrokBot Notch",
+  "CategoryIcon": "imgs/category",
+  "CodePath": "bin/plugin.js",
+  "Nodejs": { "Version": "20", "Debug": "disabled" },
+  "SDKVersion": 2,
+  "Software": { "MinimumVersion": "6.5" },
+  "OS": [{ "Platform": "mac", "MinimumVersion": "13" }],
+  "Actions": [
+    {
+      "UUID": "com.brahimhamichan.grokbotnotch.call",
+      "Name": "Call Agent",
+      "Tooltip": "Press to start or end a call. Hold to mute or unmute.",
+      "Icon": "imgs/action-call",
+      "PropertyInspectorPath": "ui/call.html",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/key-call", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.brahimhamichan.grokbotnotch.mute",
+      "Name": "Mute",
+      "Tooltip": "Mute or unmute the current call.",
+      "Icon": "imgs/action-mute",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/key-mute", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.brahimhamichan.grokbotnotch.notch",
+      "Name": "Open Notch",
+      "Tooltip": "Open or close the GrokBot notch.",
+      "Icon": "imgs/action-notch",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/key-notch", "ShowTitle": false }]
+    }
+  ]
+}

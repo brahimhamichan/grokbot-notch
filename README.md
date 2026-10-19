@@ -69,6 +69,22 @@ Prefer to let your Grok Bot do it? See [GROKBOT_SETUP.md](GROKBOT_SETUP.md).
 | Settings | `⌘,` or the gear |
 | Close | `Esc` or click outside |
 
+## Stream Deck
+
+```bash
+npm run install:streamdeck
+```
+
+Then drag actions from the **GrokBot Notch** category onto keys:
+
+| Action | Press | Hold |
+| :--- | :--- | :--- |
+| **Call Agent** (pick the agent in the key's settings) | Start or end a call with that agent | Mute / unmute |
+| **Mute** | Mute / unmute the current call | |
+| **Open Notch** | Open or close the notch | |
+
+Keys show the agent's picture, pulse while connecting, and show a live waveform and call timer during a call. The plugin talks to the app over a private Unix socket (`~/Library/Application Support/GrokBotNotch/control.sock`, owner-only), not a network port.
+
 ## How it works
 
 ```text

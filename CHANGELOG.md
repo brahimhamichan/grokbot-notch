@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Stream Deck plugin: Call Agent (press to call, hold to mute, animated key with live waveform), Mute and Open Notch actions, over a private owner-only Unix socket.
 - Keyboard Shortcuts screen in settings: change the open-notch and call shortcuts, set a shortcut per agent to call it directly, and see every in-notch key.
 
 ## 1.1.0 (hardened fork)

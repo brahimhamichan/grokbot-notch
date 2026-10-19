@@ -28,7 +28,8 @@
     "install:app": "./scripts/setup.sh --install",
     "start": "./scripts/launch.sh",
     "server": "node server.mjs",
-    "build:mac": "./scripts/build-mac-app.sh"
+    "build:mac": "./scripts/build-mac-app.sh",
+    "install:streamdeck": "./scripts/install-streamdeck.sh"
   },
   "homepage": "https://github.com/brahimhamichan/grokbot-notch#readme",
   "bugs": {

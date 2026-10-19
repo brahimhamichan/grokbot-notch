@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  body { margin: 0; padding: 10px 12px; font: 13px -apple-system, sans-serif; color: #d8d8d8; background: transparent; }
+  .row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  label { width: 70px; color: #969696; }
+  select { flex: 1; background: #3d3d3d; color: #d8d8d8; border: 0; border-radius: 3px; padding: 4px 6px; font: inherit; }
+  p { margin: 4px 0 0 80px; color: #969696; font-size: 12px; line-height: 1.4; }
+</style>
+</head>
+<body>
+  <div class="row"><label for="agent">Agent</label><select id="agent"><option value="">Loading…</option></select></div>
+  <p id="hint">Press to start or end a call. Hold to mute or unmute.</p>
+<script>
+  let ws, uuid, settings = {};
+  const select = document.getElementById("agent");
+  function connectElgatoStreamDeckSocket(port, inUUID, registerEvent, info, actionInfo) {
+    uuid = inUUID;
+    settings = JSON.parse(actionInfo).payload.settings || {};
+    ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ event: registerEvent, uuid }));
+      ws.send(JSON.stringify({ event: "sendToPlugin", context: uuid, action: JSON.parse(actionInfo).action, payload: { getAgents: true } }));
+    };
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.event !== "sendToPropertyInspector") return;
+      const { agents = [], offline } = msg.payload;
+      if (offline) { select.replaceChildren(new Option("Open GrokBot Notch first", "")); return; }
+      select.replaceChildren(new Option("Choose an agent", ""), ...agents.map((a) => new Option(a.name, a.id, false, a.id === settings.botId)));
+    };
+  }
+  select.addEventListener("change", () => {
+    settings.botId = select.value;
+    ws.send(JSON.stringify({ event: "setSettings", context: uuid, payload: settings }));
+  });
+</script>
+</body>
+</html>

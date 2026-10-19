@@ -56,6 +56,125 @@ private func carbonHotKeyHandler(
     return noErr
 }
 
+// MARK: - Local Control Socket (Stream Deck plugin and other local controllers)
+// A Unix domain socket in a 0700 directory, mode 0600, accepting only the same user's processes.
+// No TCP port, so browsers and other machines can't reach it.
+final class ControlServer {
+    static let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/GrokBotNotch")
+    static let path = directory.appendingPathComponent("control.sock").path
+    var onCommand: (([String: Any]) -> Void)?
+    var onConnect: (() -> Void)?
+    private var listenFD: Int32 = -1
+    private var listenSource: DispatchSourceRead?
+    private var clients: [Int32: (source: DispatchSourceRead, buffer: Data)] = [:]
+    // Unsent output per client (state messages carry agent photos, larger than one socket write).
+    private var outbox: [Int32: (data: Data, source: DispatchSourceWrite?)] = [:]
+
+    func start() {
+        try? FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        chmod(Self.directory.path, 0o700)
+        unlink(Self.path)
+        listenFD = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard listenFD >= 0 else { return }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(Self.path.utf8)
+        guard pathBytes.count < MemoryLayout.size(ofValue: addr.sun_path) else { close(listenFD); return }
+        withUnsafeMutableBytes(of: &addr.sun_path) { raw in
+            raw.copyBytes(from: pathBytes)
+            raw[pathBytes.count] = 0
+        }
+        let bound = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listenFD, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        guard bound == 0, chmod(Self.path, 0o600) == 0, listen(listenFD, 8) == 0 else { close(listenFD); listenFD = -1; return }
+        let source = DispatchSource.makeReadSource(fileDescriptor: listenFD, queue: .main)
+        source.setEventHandler { [weak self] in self?.acceptClient() }
+        source.resume()
+        listenSource = source
+    }
+
+    func stop() {
+        for fd in Array(clients.keys) { drop(fd) }
+        listenSource?.cancel()
+        if listenFD >= 0 { close(listenFD) }
+        unlink(Self.path)
+    }
+
+    private func acceptClient() {
+        let fd = accept(listenFD, nil, nil)
+        guard fd >= 0 else { return }
+        // Only processes running as the current user may connect.
+        var uid: uid_t = 0, gid: gid_t = 0
+        guard getpeereid(fd, &uid, &gid) == 0, uid == getuid() else { close(fd); return }
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
+        source.setEventHandler { [weak self] in self?.read(fd) }
+        source.resume()
+        clients[fd] = (source, Data())
+        onConnect?()
+    }
+
+    private func read(_ fd: Int32) {
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        let n = recv(fd, &chunk, chunk.count, 0)
+        guard n > 0, var client = clients[fd] else { return drop(fd) }
+        client.buffer.append(contentsOf: chunk[0..<n])
+        guard client.buffer.count < 65_536 else { return drop(fd) }
+        while let nl = client.buffer.firstIndex(of: 0x0A) {
+            let line = client.buffer[client.buffer.startIndex..<nl]
+            client.buffer.removeSubrange(client.buffer.startIndex...nl)
+            if let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] { onCommand?(obj) }
+        }
+        clients[fd] = client
+    }
+
+    private func drop(_ fd: Int32) {
+        guard clients[fd] != nil else { return }
+        clients[fd]?.source.cancel()
+        clients[fd] = nil
+        outbox[fd]?.source?.cancel()
+        outbox[fd] = nil
+        close(fd)
+    }
+
+    // Writes as much as the socket takes now; the rest goes out when it becomes writable.
+    private func flush(_ fd: Int32) {
+        guard var box = outbox[fd] else { return }
+        while !box.data.isEmpty {
+            let n = box.data.withUnsafeBytes { send(fd, $0.baseAddress, box.data.count, 0) }
+            if n > 0 { box.data.removeFirst(n); continue }
+            if errno == EAGAIN || errno == EWOULDBLOCK { break }
+            return drop(fd)
+        }
+        if box.data.isEmpty {
+            box.source?.cancel()
+            box.source = nil
+        } else if box.source == nil {
+            let src = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: .main)
+            src.setEventHandler { [weak self] in self?.flush(fd) }
+            src.resume()
+            box.source = src
+        }
+        outbox[fd] = box
+    }
+
+    func broadcast(_ dict: [String: Any]) {
+        guard !clients.isEmpty, var data = try? JSONSerialization.data(withJSONObject: dict) else { return }
+        data.append(0x0A)
+        for fd in Array(clients.keys) {
+            var box = outbox[fd] ?? (Data(), nil)
+            // A controller that stopped reading is dropped rather than buffered forever.
+            guard box.data.count < 16_000_000 else { drop(fd); continue }
+            box.data.append(data)
+            outbox[fd] = box
+            flush(fd)
+        }
+    }
+}
+
 // MARK: - Non-Activating Borderless Notch Panel
 final class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { true }
@@ -550,6 +669,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private var agentHotKeyRefs: [EventHotKeyRef] = []
     private var agentHotKeyIDs: [UInt32: String] = [:]
     private var isRecordingShortcut = false
+    private let control = ControlServer()
+    private var controlStates: [ObjectIdentifier: [String: Any]] = [:]
     private let voiceNotes = VoiceNoteRecorder()
     private var navHotKeysState: (active: Bool, arrows: Bool) = (false, false)
     private let hoverOpenDelay = 0.15
@@ -590,6 +711,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         registerCarbonGlobalHotKeys()
 
         bridge.start()
+        control.onCommand = { [weak self] in self?.handleControlCommand($0) }
+        control.onConnect = { [weak self] in self?.broadcastControlState() }
+        control.start()
         reconcileSurfaces()
         setupEventMonitors()
 
@@ -604,6 +728,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     func applicationWillTerminate(_ notification: Notification) {
         audioController.stop()
         unregisterShortcutHotKeys()
+        control.stop()
         setNavigationHotKeys(active: false, includeArrows: false)
         bridge.stop()
     }
@@ -691,6 +816,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
         shortcuts = all
         broadcastShortcuts()
+    }
+
+    // The state controllers see: the surface in a call, otherwise the one under the cursor.
+    private func broadcastControlState() {
+        guard let s = callSurface ?? activeSurface, let st = controlStates[ObjectIdentifier(s)] else { return }
+        control.broadcast(["event": "state"].merging(st) { a, _ in a })
+    }
+
+    // Commands from local controllers: {"cmd": "call", "botId"?}, {"cmd": "mute"}, {"cmd": "toggleNotch"}.
+    private func handleControlCommand(_ msg: [String: Any]) {
+        switch msg["cmd"] as? String {
+        case "call":
+            if let botId = msg["botId"] as? String, !botId.isEmpty, let s = callSurface ?? activeSurface {
+                reconcileSurfaces()
+                s.send(["action": "callAgent", "botId": botId])
+            } else {
+                toggleVoiceCall()
+            }
+        case "mute": toggleMute()
+        case "toggleNotch": toggleNotchExpand()
+        case "getState": broadcastControlState()
+        default: break
+        }
     }
 
     func agentHotKey(id: UInt32) {
@@ -1006,6 +1154,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
         case "quit":
             NSApp.terminate(nil)
+
+        case "controlState":
+            guard let st = body["state"] as? [String: Any] else { return }
+            controlStates[ObjectIdentifier(surface)] = st
+            broadcastControlState()
+
+        case "controlEnergy":
+            guard surface === callSurface, let v = body["value"] as? NSNumber else { return }
+            control.broadcast(["event": "energy", "value": v.doubleValue])
 
         case "ready":
             surface.send(["action": "setPrefs", "prefs": prefs])

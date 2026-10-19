@@ -1645,3 +1645,33 @@ async function init() {
 }
 
 init();
+
+// ============================================================================
+// CONTROL STATE (Stream Deck and other local controllers, via the native control socket)
+// ============================================================================
+// Reports call state when it changes, plus waveform energy ~15×/s while a call is live.
+var lastControlState = "";
+var controlMarks = new Map();
+// Bots without a photo get their flat character as an SVG data URL, rendered once.
+function controlMark(bot) {
+  const key = `${bot.avatarShape}|${bot.avatarColor}`;
+  if (!controlMarks.has(key)) {
+    const svg = renderStillSvg({ body: normalizeBodyShape(bot.avatarShape || "blob"), ink: getFlatBotInk(bot.avatarColor), size: 96, id: "sd-mark" });
+    controlMarks.set(key, `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`);
+  }
+  return controlMarks.get(key);
+}
+setInterval(() => {
+  const snapshot = JSON.stringify({
+    phase: state.call.phase,
+    activity: state.call.activity,
+    muted: state.call.isMuted,
+    botId: state.selectedBotId,
+    bots: state.bots.map((b) => ({ id: b.id, name: b.name, ink: getFlatBotInk(b.avatarColor), image: b.avatarPhotoUrl || controlMark(b) }))
+  });
+  if (snapshot !== lastControlState) {
+    lastControlState = snapshot;
+    postNativeMessage({ type: "controlState", state: JSON.parse(snapshot) });
+  }
+  if (state.call.phase === "live") postNativeMessage({ type: "controlEnergy", value: Math.round((state.call.energy || 0) * 1000) / 1000 });
+}, 66);
