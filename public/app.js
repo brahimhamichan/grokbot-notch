@@ -1675,3 +1675,13 @@ setInterval(() => {
   }
   if (state.call.phase === "live") postNativeMessage({ type: "controlEnergy", value: Math.round((state.call.energy || 0) * 1000) / 1000 });
 }, 66);
+
+// Stream Deck can't draw images nested inside an SVG, so the plugin sends its key SVG here to be flattened to a PNG.
+window.__rasterizeKey = async (svgDataUrl) => {
+  const img = new Image();
+  img.src = svgDataUrl;
+  await img.decode();
+  const canvas = Object.assign(document.createElement("canvas"), { width: 144, height: 144 });
+  canvas.getContext("2d").drawImage(img, 0, 0, 144, 144);
+  return canvas.toDataURL("image/png");
+};

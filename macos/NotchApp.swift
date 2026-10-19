@@ -122,7 +122,7 @@ final class ControlServer {
         let n = recv(fd, &chunk, chunk.count, 0)
         guard n > 0, var client = clients[fd] else { return drop(fd) }
         client.buffer.append(contentsOf: chunk[0..<n])
-        guard client.buffer.count < 65_536 else { return drop(fd) }
+        guard client.buffer.count < 2_000_000 else { return drop(fd) }
         while let nl = client.buffer.firstIndex(of: 0x0A) {
             let line = client.buffer[client.buffer.startIndex..<nl]
             client.buffer.removeSubrange(client.buffer.startIndex...nl)
@@ -837,6 +837,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         case "mute": toggleMute()
         case "toggleNotch": toggleNotchExpand()
         case "getState": broadcastControlState()
+        case "render":
+            // Flattens a key SVG (with embedded agent images) to PNG in the web view.
+            guard let svg = msg["svg"] as? String, svg.hasPrefix("data:image/svg+xml"), let reqId = msg["reqId"],
+                  let webView = surfaces.first?.webView else { return }
+            webView.callAsyncJavaScript("return await window.__rasterizeKey(svg)", arguments: ["svg": svg], in: nil, in: .page) { [weak self] result in
+                if case .success(let value) = result, let png = value as? String {
+                    self?.control.broadcast(["event": "rendered", "reqId": reqId, "image": png])
+                }
+            }
         default: break
         }
     }

@@ -20,7 +20,18 @@ let callStartedAt = 0;
 let tick = 0;
 
 const sendSD = (msg) => sd.readyState === WebSocket.OPEN && sd.send(JSON.stringify(msg));
-const setImage = (context, image) => sendSD({ event: "setImage", context, payload: { image, target: 0 } });
+const sendImage = (context, image) => sendSD({ event: "setImage", context, payload: { image, target: 0 } });
+// Keys are flattened to PNG by the app (Stream Deck skips images nested in SVG); only the newest frame per key is shown.
+let nextReq = 0;
+const pending = new Map(); // reqId → context
+const latestReq = new Map(); // context → reqId
+function setImage(context, svg) {
+  if (!conn) return sendImage(context, svg);
+  const reqId = ++nextReq;
+  pending.set(reqId, context);
+  latestReq.set(context, reqId);
+  sendApp({ cmd: "render", reqId, svg });
+}
 
 // --- App connection --------------------------------------------------------
 let conn = null;
@@ -39,13 +50,19 @@ function connectApp() {
     }
   });
   sock.on("error", () => {});
-  sock.on("close", () => { const was = !offline; conn = null; offline = true; if (was) renderAll(); setTimeout(connectApp, 2000); });
+  sock.on("close", () => { const was = !offline; conn = null; pending.clear(); offline = true; if (was) renderAll(); setTimeout(connectApp, 2000); });
 }
 const sendApp = (cmd) => conn?.write(`${JSON.stringify(cmd)}\n`);
 
 function onAppMessage(msg) {
   if (msg.event === "energy") {
     history = [...history.slice(1), Math.min(1, msg.value || 0)];
+    return;
+  }
+  if (msg.event === "rendered") {
+    const context = pending.get(msg.reqId);
+    pending.delete(msg.reqId);
+    if (context && latestReq.get(context) === msg.reqId && keys.has(context)) sendImage(context, msg.image);
     return;
   }
   if (msg.event !== "state") return;
