@@ -6,7 +6,15 @@ const url = (svg) => `data:image/svg+xml;base64,${Buffer.from(svg).toString("bas
 const frame = (body) => `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}"><rect width="${S}" height="${S}" fill="#000"/>${body}</svg>`;
 const label = (text, color = "#fff", y = 130) => `<text x="72" y="${y}" text-anchor="middle" font-family="-apple-system, Helvetica, Arial" font-size="19" font-weight="600" fill="${color}">${esc(text)}</text>`;
 
+// Character agents (no photo) are drawn live by the app; avatar() records where.
+export let characterSlot = null;
+const isCharacter = (agent) => agent?.image?.startsWith("data:image/svg");
+
 function avatar(agent, cx, cy, r, opacity = 1) {
+  if (isCharacter(agent)) {
+    characterSlot = { x: cx, y: cy, size: Math.round(r * 2.1), opacity };
+    return "";
+  }
   if (!agent?.image) {
     const initial = esc((agent?.name || "?").slice(0, 1).toUpperCase());
     return `<g opacity="${opacity}"><circle cx="${cx}" cy="${cy}" r="${r}" fill="${agent?.ink || "#555"}"/><text x="${cx}" y="${cy + r * 0.36}" text-anchor="middle" font-family="-apple-system, Helvetica" font-size="${r}" font-weight="700" fill="#000">${initial}</text></g>`;
@@ -28,7 +36,11 @@ function wave(history, color, top, height) {
   }).join("");
 }
 
-export function callKey({ agent, phase, muted, history, tick = 0, busyElsewhere, offline, elapsed }) {
+export function callKey(opts) {
+  characterSlot = null;
+  return callKeySvg(opts);
+}
+function callKeySvg({ agent, phase, muted, history, tick = 0, busyElsewhere, offline, elapsed }) {
   if (offline) return url(frame(avatar(agent, 72, 58, 40, 0.3) + label("Offline", "#888")));
   if (!agent) return url(frame(label("Choose", "#aaa", 70) + label("an agent", "#aaa", 96)));
   const ink = agent.ink || "#5aa9ff";

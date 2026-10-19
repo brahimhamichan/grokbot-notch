@@ -841,7 +841,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             // Flattens a key SVG (with embedded agent images) to PNG in the web view.
             guard let svg = msg["svg"] as? String, svg.hasPrefix("data:image/svg+xml"), let reqId = msg["reqId"],
                   let webView = surfaces.first?.webView else { return }
-            webView.callAsyncJavaScript("return await window.__rasterizeKey(svg)", arguments: ["svg": svg], in: nil, in: .page) { [weak self] result in
+            webView.callAsyncJavaScript("return await window.__rasterizeKey(svg, character)", arguments: ["svg": svg, "character": msg["character"] ?? NSNull()], in: nil, in: .page) { [weak self] result in
                 if case .success(let value) = result, let png = value as? String {
                     self?.control.broadcast(["event": "rendered", "reqId": reqId, "image": png])
                 }

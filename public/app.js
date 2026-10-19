@@ -7,7 +7,8 @@ import {
   createAppearance,
   colorTokens,
   pointerToGaze,
-  renderStillSvg
+  renderStillSvg,
+  serializeSvgTree
 } from "/motion-lab.js";
 
 const isNativeHost =
@@ -1677,11 +1678,42 @@ setInterval(() => {
 }, 66);
 
 // Stream Deck can't draw images nested inside an SVG, so the plugin sends its key SVG here to be flattened to a PNG.
-window.__rasterizeKey = async (svgDataUrl) => {
-  const img = new Image();
-  img.src = svgDataUrl;
-  await img.decode();
+// For agents without a photo, `character` asks for the live animated character (same engine as the notch) drawn into the key.
+var keyCharacters = new Map(); // botId → { engine, machine, last, body }
+function keyCharacterFrame(bot, motion, size) {
+  const body = normalizeBodyShape(bot.avatarShape || "blob");
+  let c = keyCharacters.get(bot.id);
+  if (!c || c.body !== body) {
+    const engine = createMotionEngine({ body });
+    c = { engine, machine: createStateMachine(engine, "idle", { seed: keyCharacters.size * 37 + 7, isCompact: false, isResting: false }), last: performance.now(), body };
+    keyCharacters.set(bot.id, c);
+  }
+  const now = performance.now();
+  const dt = Math.min(0.25, Math.max(0.001, (now - c.last) / 1000));
+  c.last = now;
+  c.machine.setState(motion || "idle");
+  c.machine.advance(dt);
+  c.engine.advance(dt);
+  const tree = buildFrameSvgTree(c.engine.frame(), createAppearance(getFlatBotInk(bot.avatarColor)), 184, `sd-${bot.id.slice(0, 8)}`, { displaySize: size, extent: "100%" });
+  return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(serializeSvgTree(tree))))}`;
+}
+
+window.__rasterizeKey = async (svgDataUrl, character) => {
   const canvas = Object.assign(document.createElement("canvas"), { width: 144, height: 144 });
-  canvas.getContext("2d").drawImage(img, 0, 0, 144, 144);
+  const ctx = canvas.getContext("2d");
+  const draw = async (src, x, y, w, h, alpha = 1) => {
+    const img = new Image();
+    img.src = src;
+    await img.decode();
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, x, y, w, h);
+    ctx.globalAlpha = 1;
+  };
+  await draw(svgDataUrl, 0, 0, 144, 144);
+  const bot = character && state.bots.find((b) => b.id === character.botId);
+  if (bot && !bot.avatarPhotoUrl) {
+    const { x, y, size, opacity = 1, motion } = character;
+    await draw(keyCharacterFrame(bot, motion, size), x - size / 2, y - size / 2, size, size, opacity);
+  }
   return canvas.toDataURL("image/png");
 };

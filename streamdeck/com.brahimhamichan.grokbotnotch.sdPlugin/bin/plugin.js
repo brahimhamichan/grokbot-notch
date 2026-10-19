@@ -3,7 +3,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
-import { callKey, muteKey, notchKey } from "./render.js";
+import * as art from "./render.js";
+const { callKey, muteKey, notchKey } = art;
 
 const ACTION = { call: "com.brahimhamichan.grokbotnotch.call", mute: "com.brahimhamichan.grokbotnotch.mute", notch: "com.brahimhamichan.grokbotnotch.notch" };
 const SOCKET = path.join(os.homedir(), "Library/Application Support/GrokBotNotch/control.sock");
@@ -25,12 +26,16 @@ const sendImage = (context, image) => sendSD({ event: "setImage", context, paylo
 let nextReq = 0;
 const pending = new Map(); // reqId → context
 const latestReq = new Map(); // context → reqId
-function setImage(context, svg) {
+const inFlight = new Set(); // contexts waiting on a frame (skip animation ticks instead of queueing)
+function setImage(context, svg, character = null) {
   if (!conn) return sendImage(context, svg);
   const reqId = ++nextReq;
+  inFlight.add(context);
   pending.set(reqId, context);
   latestReq.set(context, reqId);
-  sendApp({ cmd: "render", reqId, svg });
+  sendApp({ cmd: "render", reqId, svg, character });
+  // Don't let a lost frame freeze the key.
+  setTimeout(() => { if (latestReq.get(context) === reqId) inFlight.delete(context); }, 1000);
 }
 
 // --- App connection --------------------------------------------------------
@@ -50,7 +55,7 @@ function connectApp() {
     }
   });
   sock.on("error", () => {});
-  sock.on("close", () => { const was = !offline; conn = null; pending.clear(); offline = true; if (was) renderAll(); setTimeout(connectApp, 2000); });
+  sock.on("close", () => { const was = !offline; conn = null; pending.clear(); inFlight.clear(); offline = true; if (was) renderAll(); setTimeout(connectApp, 2000); });
 }
 const sendApp = (cmd) => conn?.write(`${JSON.stringify(cmd)}\n`);
 
@@ -62,12 +67,13 @@ function onAppMessage(msg) {
   if (msg.event === "rendered") {
     const context = pending.get(msg.reqId);
     pending.delete(msg.reqId);
+    if (latestReq.get(context) === msg.reqId) inFlight.delete(context);
     if (context && latestReq.get(context) === msg.reqId && keys.has(context)) sendImage(context, msg.image);
     return;
   }
   if (msg.event !== "state") return;
   const prevPhase = app.phase;
-  app = { phase: msg.phase || "idle", muted: Boolean(msg.muted), botId: msg.botId, bots: msg.bots || app.bots };
+  app = { phase: msg.phase || "idle", activity: msg.activity || "quiet", muted: Boolean(msg.muted), botId: msg.botId, bots: msg.bots || app.bots };
   if (app.phase === "live" && prevPhase !== "live") callStartedAt = Date.now();
   if (app.phase === "idle") history = new Array(BARS).fill(0);
   renderAll();
@@ -83,25 +89,37 @@ function render(context) {
   if (k.action === ACTION.call) {
     const agent = agentFor(k.settings);
     const mine = agent && app.botId === agent.id && app.phase !== "idle";
-    setImage(context, callKey({
-      agent, offline, tick, history, elapsed: elapsed(),
-      phase: mine ? app.phase : "idle",
-      muted: mine && app.muted,
-      busyElsewhere: !mine && app.phase !== "idle"
-    }));
+    const phase = mine ? app.phase : "idle";
+    const svg = callKey({ agent, offline, tick, history, elapsed: elapsed(), phase, muted: mine && app.muted, busyElsewhere: !mine && app.phase !== "idle" });
+    const slot = art.characterSlot;
+    setImage(context, svg, slot && agent ? { botId: agent.id, motion: motionFor(phase), ...slot } : null);
   } else if (k.action === ACTION.mute) {
     setImage(context, muteKey({ phase: app.phase, muted: app.muted, offline }));
   } else if (k.action === ACTION.notch) {
     setImage(context, notchKey({ offline }));
   }
 }
+// Same character states as the notch: waking while connecting, then listening/thinking/streaming during the call.
+const MOTION = { "caller-speaking": "listening", "agent-thinking": "thinking", "agent-speaking": "streaming", working: "working" };
+function motionFor(phase) {
+  if (phase === "connecting") return "waking";
+  if (phase === "live") return MOTION[app.activity] || "listening";
+  return "idle";
+}
+
 function renderAll() { for (const c of keys.keys()) render(c); }
 
-// Animate only the keys of the agent on a call (~10 fps, within Stream Deck's update budget).
+// ~10 fps: animated characters on every Call key, plus the ring/waveform on the agent in a call.
+// Frames still being drawn are skipped rather than queued.
 setInterval(() => {
-  if (offline || app.phase === "idle") return;
+  if (offline) return;
   tick++;
-  for (const [c, k] of keys) if (k.action === ACTION.call && agentFor(k.settings)?.id === app.botId) render(c);
+  for (const [c, k] of keys) {
+    if (k.action !== ACTION.call || inFlight.has(c)) continue;
+    const agent = agentFor(k.settings);
+    const inCall = agent && agent.id === app.botId && app.phase !== "idle";
+    if (inCall || agent?.image?.startsWith("data:image/svg")) render(c);
+  }
 }, 100);
 
 // --- Key handling --------------------------------------------------------------
