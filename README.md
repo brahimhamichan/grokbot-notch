@@ -38,6 +38,7 @@ The original runs a local server on `127.0.0.1:4789` with CORS `*` that forwards
 - **Chat**: start typing and press Enter.
 - **Lives in the notch** on every screen, at menu-bar height, with your agent's photo and a live waveform.
 - **Hover to peek**, click outside to close. Unsent drafts keep it open.
+- **Custom shortcuts**: change the global shortcuts and give each agent its own "call this agent" shortcut.
 - **Settings inside the notch**: voice, speed, sounds, hover, swipe, review voice notes, all screens. Open Grok Bot and Quit are there too, so there's no menu-bar icon.
 
 ## Install
@@ -64,6 +65,7 @@ Prefer to let your Grok Bot do it? See [GROKBOT_SETUP.md](GROKBOT_SETUP.md).
 | Mute during a call | `⌘⇧M` |
 | Voice note | Hold `Space`, or tap the mic |
 | Type a message | Just start typing, then `Enter` |
+| Call a specific agent | Your choice. Set it in Settings → Keyboard Shortcuts |
 | Settings | `⌘,` or the gear |
 | Close | `Esc` or click outside |
 

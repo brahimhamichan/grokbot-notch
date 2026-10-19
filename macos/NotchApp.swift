@@ -46,6 +46,8 @@ private func carbonHotKeyHandler(
                 sharedAppDelegate?.toggleMute()
             case 7:
                 sharedAppDelegate?.toggleSettings()
+            case let id where id >= 100:
+                sharedAppDelegate?.agentHotKey(id: id)
             default:
                 break
             }
@@ -545,6 +547,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private var muteHotKeyRef: EventHotKeyRef?
     private var settingsHotKeyRef: EventHotKeyRef?
     private var spaceHotKeyRef: EventHotKeyRef?
+    private var agentHotKeyRefs: [EventHotKeyRef] = []
+    private var agentHotKeyIDs: [UInt32: String] = [:]
+    private var isRecordingShortcut = false
     private let voiceNotes = VoiceNoteRecorder()
     private var navHotKeysState: (active: Bool, arrows: Bool) = (false, false)
     private let hoverOpenDelay = 0.15
@@ -560,6 +565,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             "swipeToSwitch": defaults.object(forKey: "swipeToSwitch") as? Bool ?? false,
             "reviewVoiceNotes": defaults.object(forKey: "reviewVoiceNotes") as? Bool ?? false
         ]
+    }
+
+    // User-configurable global shortcuts, persisted as {name: {keyCode, mods}} (Carbon key codes and modifier flags).
+    // "toggleNotch" and "toggleCall" have defaults; "agent:<botId>" entries start a call with that agent.
+    private static let defaultShortcuts: [String: [String: Int]] = [
+        "toggleNotch": ["keyCode": kVK_Space, "mods": optionKey],
+        "toggleCall": ["keyCode": kVK_ANSI_G, "mods": cmdKey | shiftKey]
+    ]
+    private var shortcuts: [String: [String: Int]] {
+        get { Self.defaultShortcuts.merging(defaults.dictionary(forKey: "shortcuts") as? [String: [String: Int]] ?? [:]) { $1 }.filter { !$0.value.isEmpty } }
+        set {
+            // Cleared defaults are stored as empty entries so they stay cleared.
+            var stored = newValue
+            for name in Self.defaultShortcuts.keys where stored[name] == nil { stored[name] = [:] }
+            defaults.set(stored, forKey: "shortcuts")
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -582,8 +603,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
     func applicationWillTerminate(_ notification: Notification) {
         audioController.stop()
-        if let hk1 = toggleHotKeyRef { UnregisterEventHotKey(hk1) }
-        if let hk2 = voiceHotKeyRef { UnregisterEventHotKey(hk2) }
+        unregisterShortcutHotKeys()
         setNavigationHotKeys(active: false, includeArrows: false)
         bridge.stop()
     }
@@ -613,9 +633,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))
         ]
         InstallEventHandler(GetApplicationEventTarget(), carbonHotKeyHandler, 2, &eventTypes, nil, nil)
-        // ⌥Space toggles the notch; ⌘⇧G starts/ends a voice call.
-        RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), EventHotKeyID(signature: OSType(0x47424E31), id: 1), GetApplicationEventTarget(), 0, &toggleHotKeyRef)
-        RegisterEventHotKey(UInt32(kVK_ANSI_G), UInt32(cmdKey | shiftKey), EventHotKeyID(signature: OSType(0x47424E32), id: 2), GetApplicationEventTarget(), 0, &voiceHotKeyRef)
+        registerShortcutHotKeys()
+    }
+
+    @discardableResult
+    private func registerHotKey(_ sc: [String: Int], id: UInt32, _ ref: inout EventHotKeyRef?) -> Bool {
+        guard let key = sc["keyCode"], let mods = sc["mods"] else { return false }
+        return RegisterEventHotKey(UInt32(key), UInt32(mods), EventHotKeyID(signature: OSType(0x47424E30), id: id), GetApplicationEventTarget(), 0, &ref) == noErr
+    }
+
+    // Registers the configurable shortcuts (open notch, start call, call a specific agent).
+    private func registerShortcutHotKeys() {
+        unregisterShortcutHotKeys()
+        let all = shortcuts
+        if let sc = all["toggleNotch"] { registerHotKey(sc, id: 1, &toggleHotKeyRef) }
+        if let sc = all["toggleCall"] { registerHotKey(sc, id: 2, &voiceHotKeyRef) }
+        for (i, (name, sc)) in all.filter({ $0.key.hasPrefix("agent:") }).sorted(by: { $0.key < $1.key }).enumerated() {
+            var ref: EventHotKeyRef?
+            let id = UInt32(100 + i)
+            if registerHotKey(sc, id: id, &ref), let ref {
+                agentHotKeyRefs.append(ref)
+                agentHotKeyIDs[id] = String(name.dropFirst("agent:".count))
+            }
+        }
+    }
+
+    private func unregisterShortcutHotKeys() {
+        for ref in [toggleHotKeyRef, voiceHotKeyRef].compactMap({ $0 }) + agentHotKeyRefs { UnregisterEventHotKey(ref) }
+        toggleHotKeyRef = nil
+        voiceHotKeyRef = nil
+        agentHotKeyRefs = []
+        agentHotKeyIDs = [:]
+    }
+
+    private func broadcastShortcuts() {
+        for s in surfaces { s.send(["action": "setShortcuts", "shortcuts": shortcuts]) }
+    }
+
+    // Saves a recorded shortcut (nil clears it). A combo already used by another action moves to this one.
+    private func setShortcut(name: String, to sc: [String: Int]?, from surface: NotchSurface) {
+        guard name == "toggleNotch" || name == "toggleCall" || name.hasPrefix("agent:") else { return }
+        var all = shortcuts
+        if let sc {
+            // Check the combo is free system-wide before saving it.
+            unregisterShortcutHotKeys()
+            var probe: EventHotKeyRef?
+            let free = registerHotKey(sc, id: 99, &probe)
+            if let probe { UnregisterEventHotKey(probe) }
+            guard free else {
+                surface.send(["action": "shortcutError", "message": "That shortcut is used by another app"])
+                return
+            }
+            for (other, existing) in all where existing == sc { all[other] = nil }
+            all[name] = sc
+        } else {
+            all[name] = nil
+        }
+        shortcuts = all
+        broadcastShortcuts()
+    }
+
+    func agentHotKey(id: UInt32) {
+        guard let botId = agentHotKeyIDs[id], let s = callSurface ?? activeSurface else { return }
+        reconcileSurfaces()
+        focus(s)
+        s.send(["action": "callAgent", "botId": botId])
     }
 
     // MARK: - Screens & Hardware Notch Detection
@@ -717,6 +799,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         guard let surface = surfaces.first(where: { $0.webView === webView }) else { return }
         sendGeometry(to: surface)
         surface.send(["action": "setPrefs", "prefs": prefs])
+        surface.send(["action": "setShortcuts", "shortcuts": shortcuts])
     }
 
     // Surface on the screen under the cursor (where hotkeys act), falling back to the main one.
@@ -861,6 +944,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
 
     private func refreshGlobalHotKeys() {
+        // While a shortcut is being recorded every key must reach the web view, so nothing is claimed.
+        if isRecordingShortcut {
+            setNavigationHotKeys(active: false, includeArrows: false)
+            updateMuteHotKey(active: false)
+            if let hk = spaceHotKeyRef { UnregisterEventHotKey(hk); spaceHotKeyRef = nil }
+            return
+        }
         let open = openSurface
         setNavigationHotKeys(active: open != nil, includeArrows: open.map { !$0.isTyping } ?? false)
         updateMuteHotKey(active: callSurface != nil)
@@ -916,6 +1006,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
         case "quit":
             NSApp.terminate(nil)
+
+        case "ready":
+            surface.send(["action": "setPrefs", "prefs": prefs])
+            surface.send(["action": "setShortcuts", "shortcuts": shortcuts])
+
+        case "recordingShortcut":
+            isRecordingShortcut = (body["active"] as? Bool) ?? false
+            if isRecordingShortcut { focus(surface); unregisterShortcutHotKeys() } else { registerShortcutHotKeys() }
+            refreshGlobalHotKeys()
+
+        case "setShortcut":
+            guard let name = body["name"] as? String else { return }
+            let raw = body["shortcut"] as? [String: Any]
+            let sc = raw.flatMap { r -> [String: Int]? in
+                guard let k = (r["keyCode"] as? NSNumber)?.intValue, let m = (r["mods"] as? NSNumber)?.intValue else { return nil }
+                return ["keyCode": k, "mods": m]
+            }
+            setShortcut(name: name, to: sc, from: surface)
+            if !isRecordingShortcut { registerShortcutHotKeys() }
 
         case "voiceNote":
             voiceNoteOwner = surface

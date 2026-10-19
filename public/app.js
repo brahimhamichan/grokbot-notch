@@ -91,6 +91,7 @@ const state = {
   voices: [],
   prefs: { sounds: true, hoverToOpen: true, showOnAllScreens: true, swipeToSwitch: false, reviewVoiceNotes: false },
   settingsOpen: false,
+  shortcuts: {},
   selectedBotId: null,
   statusCaption: "",
   call: {
@@ -1012,6 +1013,7 @@ function cycleBot(delta) {
 // ============================================================================
 function setSettingsOpen(open) {
   state.settingsOpen = Boolean(open);
+  setSettingsView("settings");
   dom.pouch.dataset.settings = String(state.settingsOpen);
   if (state.settingsOpen) {
     setTypingMode(false);
@@ -1331,6 +1333,135 @@ function toggleSettings() {
   setSettingsOpen(!state.settingsOpen);
 }
 
+// ============================================================================
+// KEYBOARD SHORTCUTS SCREEN
+// ============================================================================
+// Carbon modifier flags and virtual key codes, so shortcuts recorded here can be registered natively.
+const MOD = { cmd: 0x100, shift: 0x200, opt: 0x800, ctrl: 0x1000 };
+const KEY_CODES = {
+  KeyA: 0, KeyS: 1, KeyD: 2, KeyF: 3, KeyH: 4, KeyG: 5, KeyZ: 6, KeyX: 7, KeyC: 8, KeyV: 9, KeyB: 11, KeyQ: 12, KeyW: 13, KeyE: 14, KeyR: 15,
+  KeyY: 16, KeyT: 17, Digit1: 18, Digit2: 19, Digit3: 20, Digit4: 21, Digit6: 22, Digit5: 23, Equal: 24, Digit9: 25, Digit7: 26, Minus: 27,
+  Digit8: 28, Digit0: 29, BracketRight: 30, KeyO: 31, KeyU: 32, BracketLeft: 33, KeyI: 34, KeyP: 35, Enter: 36, KeyL: 37, KeyJ: 38, Quote: 39,
+  KeyK: 40, Semicolon: 41, Backslash: 42, Comma: 43, Slash: 44, KeyN: 45, KeyM: 46, Period: 47, Tab: 48, Space: 49, Backquote: 50,
+  F5: 96, F6: 97, F7: 98, F3: 99, F8: 100, F9: 101, F11: 103, F13: 105, F14: 107, F10: 109, F12: 111, F15: 113, F4: 118, F2: 120, F1: 122,
+  ArrowLeft: 123, ArrowRight: 124, ArrowDown: 125, ArrowUp: 126
+};
+const KEY_LABELS = { 36: "↩", 48: "⇥", 49: "Space", 123: "←", 124: "→", 125: "↓", 126: "↑" };
+for (const [code, kc] of Object.entries(KEY_CODES)) {
+  if (KEY_LABELS[kc]) continue;
+  KEY_LABELS[kc] = code.replace(/^Key|^Digit/, "")
+    .replace(/^(Equal|Minus|BracketRight|BracketLeft|Quote|Semicolon|Backslash|Comma|Slash|Period|Backquote)$/, (m) => ({ Equal: "=", Minus: "-", BracketRight: "]", BracketLeft: "[", Quote: "'", Semicolon: ";", Backslash: "\\", Comma: ",", Slash: "/", Period: ".", Backquote: "`" })[m]);
+}
+
+var recordingShortcut = null; // name of the shortcut being recorded, e.g. "toggleCall" or "agent:<id>"
+
+// Shortcut problems flash on the chip being recorded (or the hint when nothing is recording).
+var hintTimer;
+function showStatusCaption(text) {
+  const chip = recordingShortcut && document.querySelector(`.shortcut-chip[data-shortcut="${CSS.escape(recordingShortcut)}"]`);
+  const target = chip || document.querySelector("#shortcuts-view .settings-hint");
+  const original = target.textContent;
+  target.textContent = text;
+  target.dataset.warn = "true";
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => { delete target.dataset.warn; chip ? renderShortcuts() : (target.textContent = original); }, 1800);
+}
+
+function formatShortcut(sc) {
+  if (!sc) return "";
+  const m = sc.mods;
+  return `${m & MOD.ctrl ? "⌃" : ""}${m & MOD.opt ? "⌥" : ""}${m & MOD.shift ? "⇧" : ""}${m & MOD.cmd ? "⌘" : ""}${KEY_LABELS[sc.keyCode] ?? "?"}`;
+}
+
+function setSettingsView(view) {
+  dom.pouch.dataset.view = view;
+  if (view !== "shortcuts") stopRecordingShortcut();
+  else renderShortcuts();
+}
+
+function renderShortcuts() {
+  const rows = state.bots.map((bot) => {
+    const row = document.createElement("div");
+    row.className = "settings-row";
+    const name = document.createElement("span");
+    name.className = "agent-shortcut-name";
+    const dot = bot.avatarPhotoUrl ? Object.assign(new Image(), { src: bot.avatarPhotoUrl, alt: "" }) : document.createElement("i");
+    dot.className = "agent-dot";
+    name.append(dot, Object.assign(document.createElement("span"), { textContent: bot.name }));
+    const chip = Object.assign(document.createElement("button"), { type: "button", className: "shortcut-chip" });
+    chip.dataset.shortcut = `agent:${bot.id}`;
+    row.append(name, chip);
+    return row;
+  });
+  document.getElementById("agent-shortcuts").replaceChildren(...rows);
+  for (const chip of document.querySelectorAll(".shortcut-chip")) {
+    const name = chip.dataset.shortcut;
+    const isRec = recordingShortcut === name;
+    chip.dataset.recording = String(isRec);
+    chip.dataset.empty = String(!isRec && !state.shortcuts[name]);
+    chip.textContent = isRec ? "Press keys…" : formatShortcut(state.shortcuts[name]) || "Set";
+  }
+}
+
+function startRecordingShortcut(name) {
+  recordingShortcut = name;
+  postNativeMessage({ type: "recordingShortcut", active: true });
+  renderShortcuts();
+}
+
+function stopRecordingShortcut() {
+  if (!recordingShortcut) return;
+  recordingShortcut = null;
+  postNativeMessage({ type: "recordingShortcut", active: false });
+  renderShortcuts();
+}
+
+document.getElementById("shortcuts-view").addEventListener("click", (e) => {
+  const chip = e.target.closest(".shortcut-chip");
+  if (!chip) return;
+  if (recordingShortcut === chip.dataset.shortcut) stopRecordingShortcut();
+  else startRecordingShortcut(chip.dataset.shortcut);
+});
+document.getElementById("settings-shortcuts-btn").addEventListener("click", () => setSettingsView("shortcuts"));
+document.getElementById("shortcuts-back-btn").addEventListener("click", () => setSettingsView("settings"));
+
+// Captures the next key combo while a shortcut chip is recording (runs before every other key handler).
+window.addEventListener("keydown", (e) => {
+  if (!recordingShortcut) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  if (["Meta", "Shift", "Alt", "Control", "CapsLock", "Fn"].includes(e.key)) return;
+  const name = recordingShortcut;
+  if (e.key === "Escape") return stopRecordingShortcut();
+  if (e.key === "Backspace" || e.key === "Delete") {
+    postNativeMessage({ type: "setShortcut", name, shortcut: null });
+    return stopRecordingShortcut();
+  }
+  const keyCode = KEY_CODES[e.code];
+  const mods = (e.metaKey ? MOD.cmd : 0) | (e.shiftKey ? MOD.shift : 0) | (e.altKey ? MOD.opt : 0) | (e.ctrlKey ? MOD.ctrl : 0);
+  const isFKey = /^F\d+$/.test(e.code);
+  // Global shortcuts need ⌘, ⌥ or ⌃ (or an F-key) so they can't swallow normal typing.
+  if (keyCode === undefined || (!isFKey && !(mods & (MOD.cmd | MOD.opt | MOD.ctrl)))) {
+    showStatusCaption("Add ⌘ ⌥ or ⌃");
+    return;
+  }
+  postNativeMessage({ type: "setShortcut", name, shortcut: { keyCode, mods } });
+  stopRecordingShortcut();
+}, true);
+
+// Native hotkey for "call this agent": switch to it and start the call (or end it if it's already on the line).
+async function callAgent(botId) {
+  if (!state.bots.some((b) => b.id === botId)) return;
+  if (!state.expanded) setExpanded(true);
+  if (state.call.phase !== "idle") {
+    const same = state.selectedBotId === botId;
+    await stopVoiceCall();
+    if (same) return;
+  }
+  if (state.selectedBotId !== botId) await selectBot(botId);
+  await startVoiceCall();
+}
+
 window.addEventListener("keydown", (e) => {
   if (e.metaKey && e.key === ",") {
     e.preventDefault();
@@ -1339,7 +1470,7 @@ window.addEventListener("keydown", (e) => {
   }
   if (!state.expanded) return;
   if (state.settingsOpen) {
-    if (e.key === "Escape") setSettingsOpen(false);
+    if (e.key === "Escape") dom.pouch.dataset.view === "shortcuts" ? setSettingsView("settings") : setSettingsOpen(false);
     return;
   }
 
@@ -1399,6 +1530,16 @@ window.__notchCommand = async (cmd) => {
       state.prefs = { ...state.prefs, ...cmd.prefs };
       renderSettings();
       break;
+    case "setShortcuts":
+      state.shortcuts = cmd.shortcuts || {};
+      renderShortcuts();
+      break;
+    case "shortcutError":
+      showStatusCaption(cmd.message || "Shortcut unavailable");
+      break;
+    case "callAgent":
+      if (cmd.botId) await callAgent(cmd.botId);
+      break;
     case "collapse":
       setExpanded(false);
       break;
@@ -1423,7 +1564,9 @@ window.__notchCommand = async (cmd) => {
       cycleBot(-1);
       break;
     case "escape":
-      if (state.settingsOpen) {
+      if (state.settingsOpen && dom.pouch.dataset.view === "shortcuts") {
+        setSettingsView("settings");
+      } else if (state.settingsOpen) {
         setSettingsOpen(false);
       } else if (state.typing) {
         dom.typeInput.value = "";
@@ -1451,6 +1594,8 @@ window.__notchCommand = async (cmd) => {
       break;
   }
 };
+// Ask the native app for prefs and shortcuts now that the command handler exists (didFinish can race module load).
+postNativeMessage({ type: "ready" });
 
 window.__onNativeCursorMove = (localX, localY) => {
   updateGaze(localX, localY);

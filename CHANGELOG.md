@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Keyboard Shortcuts screen in settings: change the open-notch and call shortcuts, set a shortcut per agent to call it directly, and see every in-notch key.
+
 ## 1.1.0 (hardened fork)
 
 ### Security

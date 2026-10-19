@@ -18,6 +18,37 @@
           <path d="M0 0H18C8.059 0 0 8.059 0 18V0Z" />
         </svg>
 
+        <!-- KEYBOARD SHORTCUTS SCREEN (inside settings) -->
+        <div id="shortcuts-view" class="settings-view shortcuts-view">
+          <div class="settings-header">
+            <button id="shortcuts-back-btn" class="corner-btn" type="button" aria-label="Back" title="Back">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.25 3.5 5.75 8l4.5 4.5" /></svg>
+            </button>
+            <span class="settings-title">Keyboard Shortcuts</span>
+            <span class="settings-header-spacer"></span>
+          </div>
+          <div class="shortcuts-scroll">
+            <div class="settings-caption">Anywhere</div>
+            <div class="settings-group">
+              <div class="settings-row"><span>Open / close notch</span><button class="shortcut-chip" type="button" data-shortcut="toggleNotch"></button></div>
+              <div class="settings-row"><span>Start / end call</span><button class="shortcut-chip" type="button" data-shortcut="toggleCall"></button></div>
+            </div>
+            <div class="settings-caption">Call an agent</div>
+            <div id="agent-shortcuts" class="settings-group"></div>
+            <div class="settings-caption">In the notch</div>
+            <div class="settings-group shortcuts-static">
+              <div class="settings-row"><span>Switch agent</span><kbd>← →</kbd></div>
+              <div class="settings-row"><span>Start / end call</span><kbd>↩</kbd></div>
+              <div class="settings-row"><span>Voice note (hold)</span><kbd>Space</kbd></div>
+              <div class="settings-row"><span>Type a message</span><kbd>Any key</kbd></div>
+              <div class="settings-row"><span>Mute during call</span><kbd>⇧⌘M</kbd></div>
+              <div class="settings-row"><span>Settings</span><kbd>⌘,</kbd></div>
+              <div class="settings-row"><span>Close / back</span><kbd>Esc</kbd></div>
+            </div>
+            <p class="settings-hint">Click a shortcut, then press the new keys. Esc cancels, ⌫ clears.</p>
+          </div>
+        </div>
+
         <!-- SETTINGS SCREEN (replaces the expanded content while open) -->
         <div id="settings-view" class="settings-view">
           <div class="settings-header">
@@ -50,6 +81,7 @@
           </div>
           <div class="settings-footer">
             <button id="settings-open-app-btn" class="corner-btn" type="button" aria-label="Open Grok Bot" title="Open Grok Bot"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></button>
+            <button id="settings-shortcuts-btn" class="corner-btn" type="button" aria-label="Keyboard shortcuts" title="Keyboard shortcuts"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
             <button id="settings-quit-btn" class="corner-btn settings-quit" type="button" aria-label="Quit GrokBot Notch" title="Quit GrokBot Notch"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0"/></svg></button>
           </div>
         </div>

@@ -669,3 +669,32 @@ body.browser-preview {
 .notch-pouch[data-voice-note="draft"] .voice-note-btn,
 .notch-pouch[data-voice-note="sending"] .voice-note-btn { display: none; }
 .settings-quit.corner-btn:hover { background: #f73643; color: #fff; }
+
+/* Keyboard shortcuts screen (a sub-view of settings) */
+.notch-pouch[data-expanded="true"][data-settings="true"][data-view="shortcuts"] #settings-view { display: none; }
+.notch-pouch[data-expanded="true"][data-settings="true"]:not([data-view="shortcuts"]) #shortcuts-view { display: none; }
+.shortcuts-scroll { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; min-height: 0; flex: 1; margin: 0 -4px; padding: 0 4px 4px; scrollbar-width: none; }
+.shortcuts-scroll::-webkit-scrollbar { display: none; }
+.settings-caption { font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); padding: 6px 4px 0; }
+.settings-hint { margin: 4px 4px 0; font-size: 10.5px; color: var(--text-muted); line-height: 1.4; }
+.shortcut-chip, .shortcuts-view kbd {
+  min-width: 52px;
+  height: 24px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  font: 500 12px/24px -apple-system, BlinkMacSystemFont, sans-serif;
+  text-align: center;
+  white-space: nowrap;
+}
+.shortcuts-view kbd { background: transparent; color: var(--text-muted); min-width: 0; padding: 0; }
+.shortcut-chip { cursor: pointer; transition: background-color 150ms ease, box-shadow 150ms ease; }
+.shortcut-chip:hover { background: rgba(255, 255, 255, 0.18); }
+.shortcut-chip[data-empty="true"] { color: var(--text-muted); }
+.shortcut-chip[data-recording="true"] { background: rgba(255, 255, 255, 0.06); box-shadow: 0 0 0 1.5px var(--bot-ink); color: #fff; }
+.agent-shortcut-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.agent-shortcut-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-shortcut-name .agent-dot { width: 20px; height: 20px; border-radius: 999px; object-fit: cover; flex: none; background: rgba(255, 255, 255, 0.12); }
+[data-warn="true"] { color: #f7a536 !important; }
